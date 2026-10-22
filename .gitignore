@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Environment files (never commit secrets)
+.env
+.env.*
+!.env.example
+!.env*.example
+
+# Build outputs
+dist/
+.next/
+out/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor/OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local smoke-test output
+server/boot.err
