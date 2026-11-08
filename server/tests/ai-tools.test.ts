@@ -3,16 +3,19 @@
  * ----------------------
  * Service-level tests for the `create_task` tool pipeline in ai.service:
  * argument validation, honest success/failure reporting, idempotency,
- * bounded iteration, and safe upstream error mapping.
+ * bounded iteration, Gemini provider configuration, and safe upstream
+ * error mapping.
  *
- * OpenAI is mocked (`vi.mock('openai')`) — no API calls or charges.
- * Supabase is the in-memory fake.
+ * The Gemini endpoint (OpenAI-compatible) is mocked via `vi.mock('openai')`
+ * — no API calls or charges. Supabase is the in-memory fake.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { randomUUID } from 'node:crypto';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const { openaiCreate } = vi.hoisted(() => ({ openaiCreate: vi.fn() }));
+const { openaiCreate, openaiConstructorCalls } = vi.hoisted(() => ({
+  openaiCreate: vi.fn(),
+  openaiConstructorCalls: [] as Array<Record<string, unknown>>,
+}));
 
 vi.mock('openai', () => {
   class APIConnectionTimeoutError extends Error {}
@@ -21,7 +24,9 @@ vi.mock('openai', () => {
     chat = { completions: { create: openaiCreate } };
     static APIConnectionTimeoutError = APIConnectionTimeoutError;
     static APIError = APIError;
-    constructor(_options?: unknown) {}
+    constructor(options?: Record<string, unknown>) {
+      openaiConstructorCalls.push(options ?? {});
+    }
   }
   return { default: FakeOpenAI };
 });
@@ -36,7 +41,12 @@ vi.mock('../src/services/supabase.service.js', async () => {
   };
 });
 
-import { chat, MAX_TOOL_ROUNDS } from '../src/services/ai.service.js';
+import {
+  chat,
+  MAX_TOOL_ROUNDS,
+  GEMINI_OPENAI_BASE_URL,
+  DEFAULT_GEMINI_MODEL,
+} from '../src/services/ai.service.js';
 import {
   fakeCreateUserScopedClient,
   registerUser,
@@ -48,7 +58,7 @@ import {
   assistantReply,
   assistantWithToolCalls,
   createTaskCall,
-} from './helpers/openaiMocks.js';
+} from './helpers/geminiMocks.js';
 
 const TOKEN = 'headerT.payloadT.signatureT';
 const USER = '11111111-1111-4111-8111-111111111111';
@@ -309,7 +319,171 @@ describe('tool loop bounds and upstream errors', () => {
     ).rejects.toMatchObject({
       name: 'AiServiceError',
       statusCode: 429,
-      message: 'The AI service is rate-limited. Please try again shortly.',
+      message: 'The AI service is rate-limited or out of quota. Please try again later.',
     });
+  });
+
+  it('maps a bodyless 429 (no quota detail) to the honest combined message', async () => {
+    openaiCreate.mockRejectedValue(
+      Object.assign(new Error('429 status code (no body)'), { status: 429 }),
+    );
+
+    await expect(
+      chat(fakeCreateUserScopedClient(TOKEN), USER, 'hi'),
+    ).rejects.toMatchObject({
+      name: 'AiServiceError',
+      statusCode: 429,
+      message: 'The AI service is rate-limited or out of quota. Please try again later.',
+    });
+  });
+
+  it('maps Gemini quota exhaustion to an accurate 429', async () => {
+    openaiCreate.mockRejectedValue(
+      Object.assign(
+        new Error('RESOURCE_EXHAUSTED: Quota exceeded for quota metric "generate_requests_per_day"'),
+        { status: 429, code: 'RESOURCE_EXHAUSTED' },
+      ),
+    );
+
+    await expect(
+      chat(fakeCreateUserScopedClient(TOKEN), USER, 'hi'),
+    ).rejects.toMatchObject({
+      name: 'AiServiceError',
+      statusCode: 429,
+      message:
+        'The AI service quota has been exhausted. Please try again later or contact the site operator.',
+    });
+  });
+
+  it('maps invalid Gemini credentials to a safe, accurate 502', async () => {
+    openaiCreate.mockRejectedValue(
+      Object.assign(
+        new Error('API key not valid. Please pass a valid API key. [API_KEY_INVALID] AIzaFAKEKEY12345'),
+        { status: 401, code: 'API_KEY_INVALID' },
+      ),
+    );
+
+    const failure = await chat(fakeCreateUserScopedClient(TOKEN), USER, 'hi').then(
+      () => null,
+      (e: unknown) => e as { name: string; statusCode: number; message: string },
+    );
+
+    expect(failure).not.toBeNull();
+    expect(failure!.name).toBe('AiServiceError');
+    expect(failure!.statusCode).toBe(502);
+    expect(failure!.message).toMatch(/rejected the server credentials/i);
+    // The user-facing message must never echo the key or upstream text.
+    expect(failure!.message).not.toContain('AIzaFAKEKEY');
+    expect(failure!.message).not.toContain('API key not valid');
+  });
+
+  it('maps a missing/retired model to an accurate 502', async () => {
+    openaiCreate.mockRejectedValue(
+      Object.assign(
+        new Error('The model `gemini-3.8-flash-typo` was not found.'),
+        { status: 404, code: 'model_not_found' },
+      ),
+    );
+
+    await expect(
+      chat(fakeCreateUserScopedClient(TOKEN), USER, 'hi'),
+    ).rejects.toMatchObject({
+      name: 'AiServiceError',
+      statusCode: 502,
+      message: 'The configured AI model is unavailable. Please contact the site operator.',
+    });
+  });
+
+  it('redacts API keys from server-side logs of upstream failures', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const FAKE_KEY = 'AIzaSyFakeKeyForRedactionTest123456';
+    openaiCreate.mockRejectedValue(
+      Object.assign(new Error(`API key not valid: ${FAKE_KEY}`), { status: 401 }),
+    );
+
+    await chat(fakeCreateUserScopedClient(TOKEN), USER, 'hi').catch(() => {});
+
+    const logged = errorSpy.mock.calls.flat().join(' ');
+    errorSpy.mockRestore();
+
+    expect(logged).toContain('[redacted]');
+    expect(logged).not.toContain(FAKE_KEY);
+  });
+});
+
+describe('Gemini provider configuration', () => {
+  beforeEach(() => {
+    resetFakeSupabase();
+    registerUser(TOKEN, USER, 'a@example.com');
+    openaiCreate.mockReset();
+    openaiCreate.mockResolvedValue(assistantReply('hi'));
+  });
+
+  it('configures the SDK for Gemini\'s OpenAI-compatible endpoint with env credentials', async () => {
+    await chat(fakeCreateUserScopedClient(TOKEN), USER, 'hello');
+
+    // The Gemini client is constructed at module load; the Ollama fallback
+    // client is lazy and may have been constructed by earlier fallback
+    // tests. Select the Gemini construction explicitly instead of assuming
+    // it is the most recent one.
+    expect(openaiConstructorCalls.length).toBeGreaterThan(0);
+    const options = openaiConstructorCalls.find(
+      (call) => call.baseURL === GEMINI_OPENAI_BASE_URL,
+    )!;
+    expect(options).toBeDefined();
+    expect(options.baseURL).toBe(GEMINI_OPENAI_BASE_URL);
+    expect(options.baseURL).toBe('https://generativelanguage.googleapis.com/v1beta/openai/');
+    expect(options.apiKey).toBe(process.env.GEMINI_API_KEY);
+    expect(options.timeout).toBe(30_000);
+  });
+
+  it('sends OpenAI-compatible chat payloads (model, tools, tool_choice, messages)', async () => {
+    openaiCreate
+      .mockReset()
+      .mockResolvedValueOnce(assistantWithToolCalls([createTaskCall({ title: 'Compat check' })]))
+      .mockResolvedValueOnce(assistantReply('done'));
+
+    await chat(fakeCreateUserScopedClient(TOKEN), USER, 'create a task');
+
+    const first = openaiCreate.mock.calls[0]?.[0] as {
+      model: string;
+      tool_choice: string;
+      tools: Array<{ type: string; function: { name: string; parameters: { required: string[] } } }>;
+      messages: Array<{ role: string }>;
+    };
+    expect(first.model).toBe(process.env.GEMINI_MODEL);
+    expect(first.tool_choice).toBe('auto');
+    // Two tools now: create_task (position 0) and save_memory (position 1).
+    expect(first.tools).toHaveLength(2);
+    expect(first.tools[0]!.type).toBe('function');
+    expect(first.tools[0]!.function.name).toBe('create_task');
+    expect(first.tools[0]!.function.parameters.required).toContain('title');
+    expect(first.tools[1]!.function.name).toBe('save_memory');
+
+    // Tool-result round trip uses the standard `tool` role + tool_call_id.
+    const second = openaiCreate.mock.calls[1]?.[0] as {
+      messages: Array<{ role: string; tool_call_id?: string; content?: string | null }>;
+    };
+    const toolMsg = second.messages.find((m) => m.role === 'tool');
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg!.tool_call_id).toBeTruthy();
+    expect(JSON.parse(String(toolMsg!.content)).success).toBe(true);
+  });
+
+  it('defaults to gemini-3.8-flash when GEMINI_MODEL is not set', async () => {
+    vi.resetModules();
+    const previous = process.env.GEMINI_MODEL;
+    delete process.env.GEMINI_MODEL;
+    try {
+      const fresh = await import('../src/services/ai.service.js');
+      await fresh.chat(fakeCreateUserScopedClient(TOKEN), USER, 'hello');
+      const params = openaiCreate.mock.calls.at(-1)?.[0] as { model: string };
+      expect(params.model).toBe(DEFAULT_GEMINI_MODEL);
+      expect(params.model).toBe('gemini-3.8-flash');
+    } finally {
+      if (previous === undefined) delete process.env.GEMINI_MODEL;
+      else process.env.GEMINI_MODEL = previous;
+      vi.resetModules();
+    }
   });
 });

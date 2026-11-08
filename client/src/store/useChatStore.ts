@@ -6,12 +6,13 @@
  * Key behaviors:
  * 1. On send, an optimistic user bubble is appended immediately.
  * 2. A temporary assistant bubble with `isLoading: true` is shown so the
- *    user sees a "typing" indicator while OpenAI processes the request.
+ *    user sees a "typing" indicator while the AI provider (Gemini) processes the request.
  * 3. When the backend responds, the temporary bubble is replaced with the
  *    real assistant reply.
- * 4. After a successful response, `useTaskStore.getState().fetchTasks()` is
- *    called automatically so the Kanban board refreshes in case the AI
- *    created a task via the `create_task` tool.
+ * 4. After a successful response, `useTaskStore.getState().fetchTasks()` and
+ *    `useReminderStore.getState().fetchReminders()` are called automatically
+ *    so the Kanban board and reminder panel refresh in case the AI created
+ *    a task or scheduled a reminder via the `create_task` tool.
  *
  * SECURITY: the request body carries ONLY `{ message }`. The hard-coded
  * demo `user_id` has been removed — the backend derives identity from the
@@ -23,6 +24,7 @@
 import { create } from 'zustand';
 import api from '@/lib/api';
 import { useTaskStore } from './useTaskStore';
+import { useReminderStore } from './useReminderStore';
 import type { ChatMessage, ChatResponse } from '@/types';
 
 // ---------------------------------------------------------------------------
@@ -90,7 +92,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       // 2. POST /chat — identity comes from the bearer token (attached by
       //    the Axios interceptor); the body contains only the message.
-      //    The backend runs the OpenAI tool-calling loop and may create a
+      //    The backend runs the AI tool-calling loop and may create a
       //    task in Supabase before replying.
       const { data } = await api.post<ChatResponse>('/chat', {
         message: trimmed,
@@ -112,12 +114,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
         isLoading: false,
       }));
 
-      // 4. CRUCIAL: refresh the Kanban board so any task created by the
-      //    AI's `create_task` tool appears without a manual reload.
-      //    Wrapped in its own try/catch so a refresh failure never
-      //    removes the chat reply the user just received.
+      // 4. CRUCIAL: refresh the Kanban board AND the reminder panel so any
+      //    task/reminder created by the AI's `create_task` tool appears
+      //    without a manual reload. Each refresh is wrapped in its own
+      //    try/catch so a refresh failure never removes the chat reply.
       try {
         await useTaskStore.getState().fetchTasks();
+      } catch {
+        // Non-fatal — the chat reply is already shown.
+      }
+      try {
+        await useReminderStore.getState().fetchReminders();
       } catch {
         // Non-fatal — the chat reply is already shown.
       }

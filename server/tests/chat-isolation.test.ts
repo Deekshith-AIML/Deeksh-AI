@@ -6,14 +6,17 @@
  * - history handed to the model is scoped to that user only
  * - client-injected "history" (incl. system-role context) is ignored
  * - AI tool execution touches only the authenticated user's tasks
- * - upstream OpenAI failures return safe, sanitized errors
+ * - upstream Gemini failures return safe, sanitized errors
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 
-const { openaiCreate } = vi.hoisted(() => ({ openaiCreate: vi.fn() }));
+const { openaiCreate, openaiConstructorCalls } = vi.hoisted(() => ({
+  openaiCreate: vi.fn(),
+  openaiConstructorCalls: [] as Array<Record<string, unknown>>,
+}));
 
 vi.mock('openai', () => {
   class APIConnectionTimeoutError extends Error {}
@@ -22,7 +25,9 @@ vi.mock('openai', () => {
     chat = { completions: { create: openaiCreate } };
     static APIConnectionTimeoutError = APIConnectionTimeoutError;
     static APIError = APIError;
-    constructor(_options?: unknown) {}
+    constructor(options?: Record<string, unknown>) {
+      openaiConstructorCalls.push(options ?? {});
+    }
   }
   return { default: FakeOpenAI };
 });
@@ -47,7 +52,7 @@ import {
   assistantReply,
   assistantWithToolCalls,
   createTaskCall,
-} from './helpers/openaiMocks.js';
+} from './helpers/geminiMocks.js';
 
 const TOKEN_A = 'headerA.payloadA.signatureA';
 const TOKEN_B = 'headerB.payloadB.signatureB';
@@ -55,7 +60,7 @@ const USER_A = '11111111-1111-4111-8111-111111111111';
 const USER_B = '22222222-2222-4222-8222-222222222222';
 const authA = () => ({ Authorization: `Bearer ${TOKEN_A}` });
 
-/** Extract the first OpenAI request payload from the mock. */
+/** Extract the first Gemini request payload from the mock. */
 function firstCompletionArgs() {
   return openaiCreate.mock.calls[0]?.[0] as {
     messages: Array<{ role: string; content?: string | null }>;
@@ -225,12 +230,14 @@ describe('chat upstream failure handling', () => {
     resetFakeSupabase();
     registerUser(TOKEN_A, USER_A, 'a@example.com');
     openaiCreate.mockReset();
+    openaiConstructorCalls.length = 0;
   });
 
-  it('maps OpenAI API errors to a safe 502 without leaking internals', async () => {
+  it('maps Gemini auth failures to a safe 502 without leaking internals', async () => {
     openaiCreate.mockRejectedValue(
-      Object.assign(new Error('Incorrect API key provided: sk-INTERNAL-XYZ'), {
+      Object.assign(new Error('API key not valid. Please pass a valid API key. [API_KEY_INVALID]'), {
         status: 401,
+        code: 'API_KEY_INVALID',
       }),
     );
 
@@ -240,12 +247,14 @@ describe('chat upstream failure handling', () => {
       .send({ message: 'hello' });
 
     expect(res.status).toBe(502);
-    expect(res.body.error).toBe('The AI service is currently unavailable.');
-    expect(JSON.stringify(res.body)).not.toContain('sk-INTERNAL');
-    expect(JSON.stringify(res.body)).not.toContain('Incorrect API key');
+    expect(res.body.error).toBe(
+      'The AI service rejected the server credentials. Please contact the site operator.',
+    );
+    expect(JSON.stringify(res.body)).not.toContain('API key not valid');
+    expect(JSON.stringify(res.body)).not.toContain('API_KEY_INVALID');
   });
 
-  it('maps OpenAI 5xx errors to 502 with a retryable message', async () => {
+  it('maps Gemini 5xx errors to 502 with a retryable message', async () => {
     openaiCreate.mockRejectedValue(
       Object.assign(new Error('internal server error from upstream'), { status: 500 }),
     );
@@ -262,7 +271,7 @@ describe('chat upstream failure handling', () => {
     expect(JSON.stringify(res.body)).not.toContain('upstream');
   });
 
-  it('maps OpenAI timeouts to 504', async () => {
+  it('maps Gemini timeouts to 504', async () => {
     const OpenAI = (await import('openai')).default;
     openaiCreate.mockRejectedValue(new OpenAI.APIConnectionTimeoutError({ message: 'Request timed out.' }));
 

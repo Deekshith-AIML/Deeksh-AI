@@ -4,8 +4,9 @@
  * Test runner configuration for the backend security suite.
  *
  * Tests run in a plain Node environment against the real Express app
- * (src/app.ts) with Supabase and OpenAI replaced by test doubles, so they
- * never contact external services and never incur OpenAI charges.
+ * (src/app.ts) with Supabase and the Gemini endpoint (OpenAI-compatible
+ * SDK) replaced by test doubles, so they never contact external services
+ * and never incur API charges.
  */
 
 import { defineConfig } from 'vitest/config';

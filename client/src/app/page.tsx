@@ -10,13 +10,15 @@
 
 'use client';
 
-import { Bot, ListTodo, LogOut } from 'lucide-react';
+import { Bot, ListTodo } from 'lucide-react';
 import ChatContainer from '@/components/chat/ChatContainer';
 import ChatInput from '@/components/chat/ChatInput';
 import KanbanBoard from '@/components/tasks/KanbanBoard';
+import ReminderPanel from '@/components/reminders/ReminderPanel';
+import MemoryPanel from '@/components/memory/MemoryPanel';
 import AuthGate from '@/components/auth/AuthGate';
+import AccountMenu from '@/components/auth/AccountMenu';
 import { useChatStore } from '@/store/useChatStore';
-import { useAuthStore } from '@/store/useAuthStore';
 
 /** Chat error banner shown above the input when a send fails. */
 function ChatErrorBanner() {
@@ -39,24 +41,6 @@ function ChatErrorBanner() {
         Dismiss
       </button>
     </div>
-  );
-}
-
-/** Sign-out control shown in the chat header (uses the verified session). */
-function SignOutButton() {
-  const user = useAuthStore((state) => state.user);
-  const signOut = useAuthStore((state) => state.signOut);
-
-  return (
-    <button
-      type="button"
-      onClick={() => void signOut()}
-      title={user?.email ? `Sign out ${user.email}` : 'Sign out'}
-      aria-label="Sign out"
-      className="ml-auto flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-    >
-      <LogOut className="h-4 w-4" aria-hidden="true" />
-    </button>
   );
 }
 
@@ -90,7 +74,7 @@ function Dashboard() {
                 AI Assistant
               </p>
             </div>
-            <SignOutButton />
+            <AccountMenu />
           </header>
 
           {/* Scrollable message list */}
@@ -118,6 +102,10 @@ function Dashboard() {
 
           {/* Board content */}
           <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">
+            {/* Email reminders — kept visually separate from due dates. */}
+            <ReminderPanel />
+            {/* Long-term memory dashboard (Milestone 4). */}
+            <MemoryPanel />
             <KanbanBoard />
           </div>
         </section>

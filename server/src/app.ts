@@ -25,6 +25,10 @@ import express, {
 import cors from 'cors';
 import chatRoutes from './routes/chat.routes.js';
 import taskRoutes from './routes/task.routes.js';
+import reminderRoutes from './routes/reminder.routes.js';
+import meRoutes from './routes/me.routes.js';
+import integrationRoutes from './routes/integration.routes.js';
+import memoryRoutes from './routes/memory.routes.js';
 import { AuthError } from './services/auth.service.js';
 import { AiServiceError } from './services/ai.service.js';
 
@@ -54,7 +58,7 @@ export function createApp(): Express {
   app.use(
     cors({
       origin: corsOrigins,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       // `x-user-id` intentionally NOT allowed: it is no longer a trusted
       // (or even read) identity vector.
       allowedHeaders: ['Content-Type', 'Authorization'],
@@ -87,6 +91,10 @@ export function createApp(): Express {
 
   app.use('/api/chat', chatRoutes);
   app.use('/api/tasks', taskRoutes);
+  app.use('/api/reminders', reminderRoutes);
+  app.use('/api/me', meRoutes);
+  app.use('/api/integrations', integrationRoutes);
+  app.use('/api/memories', memoryRoutes);
 
   // 404 handler for unmatched routes.
   app.use((req: Request, res: Response) => {
@@ -104,7 +112,7 @@ export function createApp(): Express {
   // - AiServiceError sets `expose = true` because its messages are already
   //   generic and safe.
   // - Everything else (5xx): a generic message is returned; the real error
-  //   (which may contain SQL/OpenAI internals) is logged server-side only.
+  //   (which may contain SQL/AI-provider internals) is logged server-side only.
 
   app.use((err: Error & { statusCode?: number; expose?: boolean; details?: unknown }, _req: Request, res: Response, _next: NextFunction) => {
     const statusCode = err.statusCode ?? 500;

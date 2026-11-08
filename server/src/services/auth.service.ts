@@ -17,6 +17,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createUserScopedClient } from './supabase.service.js';
+import { normalizeAuthProvider } from '../../../shared/auth.js';
 import type { AuthIdentity } from '../../../shared/types.js';
 
 // ---------------------------------------------------------------------------
@@ -67,7 +68,11 @@ export async function verifyAccessToken(accessToken: string): Promise<VerifiedId
   // User-scoped client for both verification and subsequent data access.
   const client = createUserScopedClient(accessToken);
 
-  let user: { id: string; email?: string } | null = null;
+  let user: {
+    id: string;
+    email?: string;
+    app_metadata?: Record<string, unknown>;
+  } | null = null;
   try {
     const { data, error } = await client.auth.getUser(accessToken);
     if (error || !data?.user) {
@@ -86,6 +91,9 @@ export async function verifyAccessToken(accessToken: string): Promise<VerifiedId
     identity: {
       userId: user.id,
       email: user.email,
+      // Provider comes from the VERIFIED auth server response only —
+      // it is never taken from headers, query params, or the body.
+      provider: normalizeAuthProvider(user.app_metadata?.provider),
     },
     client,
   };

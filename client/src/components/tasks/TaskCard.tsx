@@ -5,7 +5,10 @@
  * Shows:
  * - Task title
  * - Priority badge (red=high, amber=medium, green=low)
- * - Due date with a Clock icon (when set)
+ * - Due date with a Clock icon (when set) — a DEADLINE, slate styling
+ * - Reminder line with a Bell icon (when the task has reminders) — an
+ *   email NOTIFICATION, violet styling, deliberately distinct from the
+ *   due date so the two are never confused
  * - A "Move" button that advances the task to its next status
  *   (todo → in_progress → done). No drag-and-drop in v1.
  */
@@ -13,11 +16,12 @@
 'use client';
 
 import { format } from 'date-fns';
-import { Clock, ArrowRight, Trash2 } from 'lucide-react';
+import { Clock, ArrowRight, Trash2, Bell } from 'lucide-react';
 import { useTaskStore } from '@/store/useTaskStore';
+import { useReminderStore } from '@/store/useReminderStore';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
-import type { Task, TaskStatus } from '@/types';
+import type { Task, TaskStatus, Reminder } from '@/types';
 
 // ---------------------------------------------------------------------------
 // Status flow configuration
@@ -48,8 +52,16 @@ interface TaskCardProps {
 export function TaskCard({ task }: TaskCardProps) {
   const updateTaskStatus = useTaskStore((state) => state.updateTaskStatus);
   const deleteTask = useTaskStore((state) => state.deleteTask);
+  const reminders = useReminderStore((state) => state.reminders);
 
   const nextStatus = NEXT_STATUS[task.status];
+
+  // Reminders linked to THIS task (kept separate from the due date).
+  const taskReminders = reminders.filter((r) => r.task_id === task.id);
+  const activeReminder: Reminder | undefined = taskReminders.find(
+    (r) => r.status === 'pending' || r.status === 'claimed',
+  );
+  const failedReminder = taskReminders.find((r) => r.status === 'failed');
 
   const handleMove = async () => {
     if (!nextStatus) return;
@@ -70,7 +82,7 @@ export function TaskCard({ task }: TaskCardProps) {
         <Badge variant={task.priority}>{task.priority}</Badge>
       </div>
 
-      {/* Due date */}
+      {/* Due date — a DEADLINE (slate Clock styling) */}
       {task.due_date && (
         <div className="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
           <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -79,6 +91,30 @@ export function TaskCard({ task }: TaskCardProps) {
           </span>
         </div>
       )}
+
+      {/* Reminder — an EMAIL NOTIFICATION (violet Bell styling, never merged
+          with the due date above). Shows the active or last outcome. */}
+      {activeReminder && (
+        <div className="mt-1.5 flex items-center gap-1.5 text-xs text-violet-700">
+          <Bell className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span>
+            Remind · {format(new Date(activeReminder.reminder_at), 'MMM d · h:mm a')}
+          </span>
+        </div>
+      )}
+      {!activeReminder && failedReminder && (
+        <div className="mt-1.5 flex items-center gap-1.5 text-xs text-red-600">
+          <Bell className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span className="truncate">Reminder failed to deliver</span>
+        </div>
+      )}
+      {!activeReminder && !failedReminder &&
+        taskReminders.some((r) => r.status === 'sent') && (
+          <div className="mt-1.5 flex items-center gap-1.5 text-xs text-emerald-600">
+            <Bell className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span>Reminder delivered ✓</span>
+          </div>
+        )}
 
       {/* Actions */}
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2">

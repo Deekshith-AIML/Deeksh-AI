@@ -16,6 +16,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { chatRequestSchema } from '../../../shared/schemas.js';
 import * as aiService from '../services/ai.service.js';
+import * as MemoryService from '../services/memory.service.js';
 import { getAuth, getDb } from '../middleware/auth.middleware.js';
 import type { ChatResponse } from '../../../shared/types.js';
 
@@ -33,15 +34,22 @@ export async function chatHandler(req: Request, res: Response, next: NextFunctio
     }
 
     // 3. Persist the user's message (best-effort; failures are logged).
-    await aiService.saveMessage(db, userId, 'user', parsed.data.message);
+    const messageId = await aiService.saveMessage(db, userId, 'user', parsed.data.message);
 
     // 4. Run the OpenAI chat + tool-calling loop. History is loaded inside
     //    the service, scoped to `userId`. Upstream failures surface as
     //    AiServiceError with a client-safe message.
-    const response: ChatResponse = await aiService.chat(db, userId, parsed.data.message);
+    const response: ChatResponse = await aiService.chat(db, userId, parsed.data.message, messageId ?? null);
 
     // 5. Persist the assistant's reply (best-effort).
-    await aiService.saveMessage(db, userId, 'assistant', response.reply);
+    const assistantId = await aiService.saveMessage(db, userId, 'assistant', response.reply);
+
+    // 6. Consent-gated durable extraction (Milestone 4.1 — Task C):
+    //    enqueues ONLY when automatic_memory_extraction is ON; never blocks
+    //    the response, never runs when consent is off (default).
+    if (messageId) {
+      void MemoryService.enqueueMemoryExtraction(db, userId, messageId);
+    }
 
     res.status(200).json(response);
   } catch (err) {

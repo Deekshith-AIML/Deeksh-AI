@@ -16,6 +16,7 @@
 
 import { create } from 'zustand';
 import { getSupabase } from '@/lib/supabase';
+import { buildGoogleLogin } from '@/lib/oauth';
 import type { User } from '@supabase/supabase-js';
 
 // ---------------------------------------------------------------------------
@@ -42,6 +43,11 @@ interface AuthState {
   signIn: (email: string, password: string) => Promise<boolean>;
   /** Email + password sign-up. Returns true on success (may require email confirmation). */
   signUp: (email: string, password: string) => Promise<boolean>;
+  /**
+   * Start the Google OAuth login (identity scopes only — never Gmail or
+   * Calendar). The browser redirects to Google and back to /auth/callback.
+   */
+  signInWithGoogle: () => Promise<void>;
   /** Sign out locally (and revoke the Supabase session). */
   signOut: () => Promise<void>;
   /** Clear the displayed error. */
@@ -174,6 +180,27 @@ export const useAuthStore = create<AuthState>((set) => ({
         error: err instanceof Error ? err.message : 'Sign-up failed.',
       });
       return false;
+    }
+  },
+
+  signInWithGoogle: async () => {
+    set({ isSubmitting: true, error: null, notice: null });
+    try {
+      const supabase = getSupabase();
+      // Same-origin callback only — buildGoogleLogin derives it from the
+      // current origin (no open redirect). Scopes are identity-only.
+      const { provider, options } = buildGoogleLogin(window.location.origin);
+      const { error } = await supabase.auth.signInWithOAuth({ provider, options });
+      if (error) {
+        // Redirect did not start — surface the reason instead of hanging.
+        set({ isSubmitting: false, error: friendlyAuthError(error.message) });
+      }
+      // On success the browser navigates away; isSubmitting stays true.
+    } catch (err) {
+      set({
+        isSubmitting: false,
+        error: err instanceof Error ? err.message : 'Google sign-in failed.',
+      });
     }
   },
 

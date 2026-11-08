@@ -1,9 +1,9 @@
 /**
- * tests/helpers/openaiMocks.ts
+ * tests/helpers/geminiMocks.ts
  * ----------------------------
- * Builders for fake OpenAI chat-completion responses.
- * Used with the `vi.mock('openai')` factories so no real API calls (and no
- * API charges) are ever made by the test suite.
+ * Builders for fake Gemini chat-completion responses (OpenAI-compatible
+ * wire format). Used with the `vi.mock('openai')` factories so no real API
+ * calls (and no API charges) are ever made by the test suite.
  */
 
 interface ToolCallSpec {
@@ -19,7 +19,7 @@ function usage() {
 /** A plain assistant text reply (no tool calls). */
 export function assistantReply(content: string) {
   return {
-    model: 'gpt-test',
+    model: 'gemini-test',
     choices: [
       { index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' },
     ],
@@ -30,7 +30,7 @@ export function assistantReply(content: string) {
 /** An assistant message requesting one or more tool calls. */
 export function assistantWithToolCalls(calls: ToolCallSpec[]) {
   return {
-    model: 'gpt-test',
+    model: 'gemini-test',
     choices: [
       {
         index: 0,

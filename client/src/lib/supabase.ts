@@ -6,7 +6,7 @@
  * Configuration uses only PUBLIC values:
  *   - NEXT_PUBLIC_SUPABASE_URL       — project URL
  *   - NEXT_PUBLIC_SUPABASE_ANON_KEY  — anon/publishable key
- * The service-role key and the OpenAI API key must NEVER appear in
+ * The service-role key and the AI provider (Gemini) API key must NEVER appear in
  * frontend code or NEXT_PUBLIC_* variables.
  *
  * The client is created lazily so that `next build` succeeds even when
@@ -43,6 +43,11 @@ export function getSupabase(): SupabaseClient {
       autoRefreshToken: true,
       persistSession: true,
       detectSessionInUrl: true,
+      // PKCE for every OAuth flow (Google login): supabase-js stores the
+      // code_verifier at login time and validates `state` + the verifier
+      // when the callback URL's code is exchanged — this is the OAuth
+      // state validation for our redirect flow.
+      flowType: 'pkce',
     },
   });
 
