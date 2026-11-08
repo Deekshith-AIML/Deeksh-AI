@@ -47,6 +47,7 @@ import * as memoryService from './memory.service.js';
 import { embed } from './embedding.service.js';
 import * as documentRetrieval from './documents/retrieval.service.js';
 import { getDocumentsConfig } from '../config/documents.config.js';
+import { validateCitations, buildSourceMap } from './documents/citation.service.js';
 import type { ChatResponse, DocumentSource, MessageRole } from '../../../shared/types.js';
 
 // ---------------------------------------------------------------------------
@@ -1010,6 +1011,19 @@ export async function chat(
           total_tokens: completion.usage.total_tokens,
         }
       : undefined;
+  }
+
+  // Validate citations: drop any markers the model invented.
+  if (documentSources.length > 0 && finalContent) {
+    const sourceMap = buildSourceMap(documentSources);
+    const citationResult = validateCitations(finalContent, sourceMap);
+    if (citationResult.invalidMarkers.length > 0) {
+      console.warn('[ai.service] dropped invented citation markers:', citationResult.invalidMarkers);
+    }
+    // Only return sources that were actually cited (or all if none cited but context was used).
+    if (citationResult.sources.length > 0) {
+      documentSources = citationResult.sources;
+    }
   }
 
   return {
