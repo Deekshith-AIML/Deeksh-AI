@@ -454,8 +454,9 @@ Never place `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`, or
 - Baseline commit preserved: `8c61e5b` ("Secure Coolie AI authentication and
   task API").
 - Stabilization branch: `stabilization/m4.2`.
-- Checkpoint commit: the commit that introduces this report on that branch
-  (`git log -1`). History was **not** rewritten.
+- Checkpoint commit: `ba180ae` — "feat: complete DEEKSH AI milestones
+  M2-M4.1" (single reviewed checkpoint because the changes are
+  interconnected). History was **not** rewritten.
 
 ---
 
