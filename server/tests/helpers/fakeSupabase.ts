@@ -140,6 +140,71 @@ export interface FakeExtractionJob {
   updated_at: string;
 }
 
+/** Row in `public.documents` (Milestone 5 — Knowledge Base). */
+export interface FakeDocument {
+  id: string;
+  user_id: string;
+  original_filename: string;
+  storage_filename: string;
+  extension: string;
+  mime_type: string;
+  file_size: number;
+  content_hash: string;
+  storage_path: string;
+  status: string;
+  page_count: number | null;
+  text_char_count: number | null;
+  chunk_count: number;
+  extraction_metadata: Record<string, unknown>;
+  error_message: string | null;
+  deletion_attempts: number;
+  deletion_error: string | null;
+  processing_started_at: string | null;
+  processing_completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Row in `public.document_chunks` (Milestone 5). */
+export interface FakeDocumentChunk {
+  id: string;
+  document_id: string;
+  user_id: string;
+  chunk_index: number;
+  content: string;
+  embedding: number[] | null;
+  embedding_provider: string;
+  embedding_model_version: string;
+  embedding_dimensions: number;
+  page_start: number | null;
+  page_end: number | null;
+  heading: string | null;
+  section_path: string | null;
+  paragraph_start: number | null;
+  paragraph_end: number | null;
+  char_start: number | null;
+  char_end: number | null;
+  token_estimate: number | null;
+  created_at: string;
+}
+
+/** Row in `public.document_processing_jobs` (Milestone 5). */
+export interface FakeDocumentJob {
+  id: string;
+  document_id: string;
+  user_id: string;
+  status: string;
+  attempts: number;
+  max_attempts: number;
+  claimed_at: string | null;
+  last_attempt_at: string | null;
+  next_attempt_at: string;
+  failed_at: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /** Per-user auth metadata reported back by `auth.getUser`. */
 interface FakeUserMeta {
   provider: 'email' | 'google';
@@ -166,6 +231,9 @@ interface FakeState {
   memories: FakeMemory[];
   memorySettings: FakeMemorySettings[];
   extractionJobs: FakeExtractionJob[];
+  documents: FakeDocument[];
+  documentChunks: FakeDocumentChunk[];
+  documentJobs: FakeDocumentJob[];
   /** Monotonic counter for deterministic created_at ordering. */
   seq: number;
   /** Injected DB failures consumed on the next matching operation. */
@@ -193,6 +261,9 @@ const state: FakeState = {
   memories: [],
   memorySettings: [],
   extractionJobs: [],
+  documents: [],
+  documentChunks: [],
+  documentJobs: [],
   seq: 0,
   failures: [],
   concurrentInserts: [],
@@ -271,6 +342,62 @@ export function injectConcurrentInsert(table: string, row: Record<string, unknow
   state.concurrentInserts.push({ table, row });
 }
 
+// ---------------------------------------------------------------------------
+// Fake private object storage (Milestone 5)
+// ---------------------------------------------------------------------------
+
+interface StoredObject {
+  bytes: Buffer;
+  contentType: string;
+}
+
+type StorageOp = 'upload' | 'download' | 'remove' | 'sign';
+
+const storageObjects = new Map<string, StoredObject>();
+const storageFailures: Array<{ op: StorageOp; message: string }> = [];
+
+function storageKey(bucket: string, path: string): string {
+  return `${bucket}/${path}`;
+}
+
+/** Make the next storage operation of `op` fail. */
+export function injectStorageFailure(op: StorageOp, message = 'simulated storage failure'): void {
+  storageFailures.push({ op, message });
+}
+
+/** Seed an object directly (as if it had been uploaded earlier). */
+export function seedStoredObject(
+  bucket: string,
+  path: string,
+  bytes: Buffer,
+  contentType = 'application/octet-stream',
+): void {
+  storageObjects.set(storageKey(bucket, path), { bytes: Buffer.from(bytes), contentType });
+}
+
+/** Test-facing view of the fake bucket. */
+export const fakeStorage = {
+  get objects(): Map<string, StoredObject> {
+    return storageObjects;
+  },
+  has(bucket: string, path: string): boolean {
+    return storageObjects.has(storageKey(bucket, path));
+  },
+  bytes(bucket: string, path: string): Buffer | undefined {
+    return storageObjects.get(storageKey(bucket, path))?.bytes;
+  },
+  keys(): string[] {
+    return [...storageObjects.keys()];
+  },
+};
+
+function takeStorageFailure(op: StorageOp): { message: string } | null {
+  const idx = storageFailures.findIndex((f) => f.op === op);
+  if (idx === -1) return null;
+  const [failure] = storageFailures.splice(idx, 1);
+  return { message: failure!.message };
+}
+
 /** Reset all in-memory data between tests. */
 export function resetFakeSupabase(): void {
   state.validTokens.clear();
@@ -286,6 +413,11 @@ export function resetFakeSupabase(): void {
   state.memories = [];
   state.memorySettings = [];
   state.extractionJobs = [];
+  state.documents = [];
+  state.documentChunks = [];
+  state.documentJobs = [];
+  storageObjects.clear();
+  storageFailures.length = 0;
   state.seq = 0;
   state.failures = [];
   state.concurrentInserts = [];
@@ -328,6 +460,15 @@ export const fakeDb = {
   get memory_extraction_jobs() {
     return state.extractionJobs;
   },
+  get documents() {
+    return state.documents;
+  },
+  get document_chunks() {
+    return state.documentChunks;
+  },
+  get document_processing_jobs() {
+    return state.documentJobs;
+  },
 };
 
 /** Return the backing array for a supported table (structurally typed). */
@@ -345,6 +486,13 @@ function rowsFor(table: string): Array<Record<string, unknown>> {
   }
   if (table === 'memory_extraction_jobs') {
     return state.extractionJobs as unknown as Array<Record<string, unknown>>;
+  }
+  if (table === 'documents') return state.documents as unknown as Array<Record<string, unknown>>;
+  if (table === 'document_chunks') {
+    return state.documentChunks as unknown as Array<Record<string, unknown>>;
+  }
+  if (table === 'document_processing_jobs') {
+    return state.documentJobs as unknown as Array<Record<string, unknown>>;
   }
   throw new Error(`fakeSupabase: unexpected table "${table}"`);
 }
@@ -365,6 +513,7 @@ class FakeQuery implements PromiseLike<FakeResult> {
   private eqs: Array<[string, unknown]> = [];
   private neqs: Array<[string, unknown]> = [];
   private lts: Array<[string, unknown]> = [];
+  private ilikes: Array<[string, string]> = [];
   private ins: Array<[string, unknown[]]> = [];
   private patch: Record<string, unknown> | null = null;
   private insertRows: Array<Record<string, unknown>> = [];
@@ -431,6 +580,12 @@ class FakeQuery implements PromiseLike<FakeResult> {
     return this;
   }
 
+  /** Case-insensitive substring match with SQL `%` wildcards. */
+  ilike(column: string, pattern: string): this {
+    this.ilikes.push([column, pattern]);
+    return this;
+  }
+
   neq(column: string, value: unknown): this {
     this.neqs.push([column, value]);
     return this;
@@ -472,6 +627,11 @@ class FakeQuery implements PromiseLike<FakeResult> {
     }
     for (const [col, vals] of this.ins) {
       if (!vals.includes(row[col])) return false;
+    }
+    for (const [col, pattern] of this.ilikes) {
+      const value = String(row[col] ?? '').toLowerCase();
+      const needle = pattern.replace(/%/g, '').toLowerCase();
+      if (!value.includes(needle)) return false;
     }
     return true;
   }
@@ -641,6 +801,12 @@ class FakeQuery implements PromiseLike<FakeResult> {
           state.extractionJobs = keep as unknown as FakeExtractionJob[];
         } else if (this.table === 'integration_grants') {
           state.integrationGrants = keep as unknown as FakeGrant[];
+        } else if (this.table === 'documents') {
+          state.documents = keep as unknown as FakeDocument[];
+        } else if (this.table === 'document_chunks') {
+          state.documentChunks = keep as unknown as FakeDocumentChunk[];
+        } else if (this.table === 'document_processing_jobs') {
+          state.documentJobs = keep as unknown as FakeDocumentJob[];
         }
         return this.returning ? this.applyTerminal(removed) : { data: null, error: null };
       }
@@ -849,6 +1015,134 @@ function fakeRpc(
     return { data: count, error: null };
   }
 
+  /**
+   * `match_document_chunks(query_embedding, p_user_id, match_threshold,
+   * match_count, p_document_ids)` — Milestone 5 vector retrieval.
+   * Token-overlap approximation (no pgvector in the fake) plus a forced
+   * similarity hook; ownership + status filtering are real here.
+   */
+  if (fn === 'match_document_chunks') {
+    const userId = String(args.p_user_id ?? '');
+    const threshold = Number(args.match_threshold ?? 0.5);
+    const count = Math.min(Math.max(Number(args.match_count ?? 8), 1), 50);
+    const documentIds = Array.isArray(args.p_document_ids)
+      ? args.p_document_ids.map(String)
+      : null;
+    if (!userId) {
+      return { data: null, error: { message: 'p_user_id is required', code: 'PGRST202' } };
+    }
+
+    const queryText = String(args.query_text ?? '');
+    const queryTokens = new Set(
+      queryText
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean),
+    );
+    const rows = state.documentChunks
+      .filter((c) => {
+        const chunk = state.documents.find((d) => d.id === c.document_id);
+        if (!chunk || chunk.user_id !== userId) return false;
+        if (chunk.status !== 'ready') return false;
+        if (!c.embedding) return false;
+        if (documentIds && !documentIds.includes(c.document_id)) return false;
+        return true;
+      })
+      .map((c) => {
+        const doc = state.documents.find((d) => d.id === c.document_id);
+        const chunkTokens = new Set(
+          c.content.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean),
+        );
+        let overlap = 0;
+        for (const t of queryTokens) if (chunkTokens.has(t)) overlap += 1;
+        const lexical = overlap > 0;
+        let similarity: number;
+        if (forcedMatchSimilarity !== null) {
+          similarity = forcedMatchSimilarity;
+        } else {
+          similarity = lexical ? 0.85 : 0.25;
+        }
+        return {
+          chunk_id: c.id,
+          document_id: c.document_id,
+          user_id: c.user_id,
+          content: c.content,
+          similarity,
+          chunk_index: c.chunk_index,
+          page_start: c.page_start,
+          page_end: c.page_end,
+          heading: c.heading,
+          section_path: c.section_path,
+          char_start: c.char_start,
+          char_end: c.char_end,
+          original_filename: doc?.original_filename ?? '',
+        };
+      })
+      .filter((r) => r.similarity >= threshold)
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, count);
+    return { data: rows, error: null };
+  }
+
+  if (fn === 'claim_document_processing_jobs') {
+    const limit = Math.min(Math.max(Number(args.p_limit ?? 5), 1), 20);
+    const nowIso = new Date().toISOString();
+    for (const j of state.documentJobs) {
+      if (
+        j.status === 'claimed' &&
+        j.claimed_at &&
+        new Date(j.claimed_at).getTime() < Date.now() - 300_000
+      ) {
+        if (j.attempts >= j.max_attempts) {
+          j.status = 'failed';
+          j.failed_at = nowIso;
+          j.error_message = 'STALE_JOB_ATTEMPTS_EXHAUSTED';
+        } else {
+          j.status = 'pending';
+          j.claimed_at = null;
+          j.next_attempt_at = nowIso;
+        }
+      }
+    }
+    const claimed = state.documentJobs
+      .filter((j) => j.status === 'pending')
+      .sort((a, b) => (a.next_attempt_at < b.next_attempt_at ? -1 : 1))
+      .slice(0, limit)
+      .map((j) => {
+        j.status = 'claimed';
+        j.claimed_at = nowIso;
+        j.attempts += 1;
+        return { ...j };
+      });
+    return { data: claimed, error: null };
+  }
+
+  if (fn === 'recover_stale_document_jobs') {
+    const staleSeconds = Math.max(Number(args.p_stale_seconds ?? 300), 1);
+    const cutoff = Date.now() - staleSeconds * 1000;
+    const nowIso = new Date().toISOString();
+    let count = 0;
+    for (const j of state.documentJobs) {
+      if (
+        j.status === 'claimed' &&
+        j.claimed_at &&
+        new Date(j.claimed_at).getTime() < cutoff
+      ) {
+        if (j.attempts >= j.max_attempts) {
+          j.status = 'failed';
+          j.failed_at = nowIso;
+          j.error_message = 'STALE_JOB_ATTEMPTS_EXHAUSTED';
+        } else {
+          j.status = 'pending';
+          j.claimed_at = null;
+          j.next_attempt_at = nowIso;
+        }
+        count += 1;
+      }
+    }
+    return { data: count, error: null };
+  }
+
   return {
     data: null,
     error: { message: `function ${fn}() does not exist`, code: 'PGRST202' },
@@ -900,6 +1194,55 @@ export function fakeCreateUserScopedClient(accessToken: string) {
     },
     from: (table: string) => new FakeQuery(table, () => (state.seq += 1)),
     rpc: async (fn: string, args: Record<string, unknown> = {}) => fakeRpc(fn, args),
+    storage: {
+      from(bucket: string) {
+        return {
+          async upload(path: string, body: Buffer, opts?: { contentType?: string; upsert?: boolean }) {
+            const failure = takeStorageFailure('upload');
+            if (failure) {
+              throw new Error(failure.message);
+            }
+            storageObjects.set(storageKey(bucket, path), {
+              bytes: Buffer.from(body),
+              contentType: opts?.contentType ?? 'application/octet-stream',
+            });
+            return { data: {}, error: null };
+          },
+          async download(path: string) {
+            const failure = takeStorageFailure('download');
+            if (failure) {
+              throw new Error(failure.message);
+            }
+            const obj = storageObjects.get(storageKey(bucket, path));
+            if (!obj) {
+              throw new Error('Object not found');
+            }
+            return {
+              data: new Blob([new Uint8Array(obj.bytes)]),
+              error: null,
+            };
+          },
+          async remove(paths: string[]) {
+            const failure = takeStorageFailure('remove');
+            if (failure) {
+              throw new Error(failure.message);
+            }
+            for (const p of paths) storageObjects.delete(storageKey(bucket, p));
+            return { data: {}, error: null };
+          },
+          async createSignedUrl(path: string, expiresIn: number) {
+            const failure = takeStorageFailure('sign');
+            if (failure) {
+              throw new Error(failure.message);
+            }
+            return {
+              data: { signedUrl: `https://fake.local/${bucket}/${path}?expires=${expiresIn}` },
+              error: null,
+            };
+          },
+        };
+      },
+    },
   };
   // Structural cast: only the used surface matters.
   return client as never;

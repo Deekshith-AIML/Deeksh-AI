@@ -244,6 +244,38 @@ export interface IntegrationResponse {
 export interface ChatRequest {
   /** The latest user utterance. */
   message: string;
+  /**
+   * Optional Knowledge Base scope: ask about these documents only.
+   * Server-verified against the caller's own READY documents; ids that
+   * are not owned are ignored, never fetched.
+   */
+  document_ids?: string[];
+  /**
+   * Force Knowledge Base retrieval even when the message has no obvious
+   * document cue. Still scoped to the caller's own documents.
+   */
+  use_documents?: boolean;
+}
+
+/**
+ * One resolvable citation returned with a chat reply.
+ *
+ * Only markers that map to a real retrieved chunk of a still-owned,
+ * still-existing document are returned. Markers the model invents are
+ * dropped server-side and never become sources.
+ */
+export interface DocumentSource {
+  /** Citation marker used in the reply, e.g. "S1". */
+  marker: string;
+  document_id: string;
+  chunk_id: string;
+  /** Original filename (safe to display). */
+  filename: string;
+  /** PDF page number when the chunk has one; null for DOCX/TXT. */
+  page: number | null;
+  /** Nearest heading/section title when available. */
+  heading: string | null;
+  similarity: number;
 }
 
 /** Successful response returned by `POST /api/chat`. */
@@ -258,6 +290,10 @@ export interface ChatResponse {
     completion_tokens: number;
     total_tokens: number;
   };
+  /** Resolvable document citations (Knowledge Base answers only). */
+  sources?: DocumentSource[];
+  /** True when document chunks were actually supplied to the model. */
+  document_context_used?: boolean;
 }
 
 /** Standard error envelope returned by all failing endpoints. */
@@ -344,4 +380,153 @@ export interface MemorySettings {
   max_memory_context_chars: number;
   created_at: string;
   updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge Base (Milestone 5)
+// ---------------------------------------------------------------------------
+
+/** Lifecycle of an uploaded document (mirrors the CHECK in 0011). */
+export type DocumentStatus =
+  | 'uploaded'
+  | 'pending'
+  | 'processing'
+  | 'ready'
+  | 'failed'
+  | 'deleting'
+  | 'deleted';
+
+/** Supported upload formats. */
+export type DocumentExtension = 'pdf' | 'docx' | 'txt';
+
+/** Server-detected MIME type (the browser value is never trusted). */
+export type DocumentMimeType =
+  | 'application/pdf'
+  | 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  | 'text/plain';
+
+/**
+ * Non-sensitive extraction facts recorded by the worker.
+ * `scanned` is true only for PDFs with too little extractable text; those
+ * fail with `SCANNED_PDF_REQUIRES_OCR` because no OCR is implemented.
+ */
+export interface DocumentExtractionMetadata {
+  encoding?: string;
+  scanned?: boolean;
+  paragraphs?: number;
+  headings?: number;
+  tables?: number;
+  pages_with_text?: number;
+  truncated?: boolean;
+}
+
+/**
+ * A document as exposed by the API.
+ *
+ * SECURITY: deliberately excludes `storage_path` and `storage_filename`.
+ * Object locations are server-side only and are never sent to clients.
+ */
+export interface KnowledgeDocument {
+  id: string;
+  original_filename: string;
+  extension: DocumentExtension;
+  mime_type: DocumentMimeType;
+  file_size: number;
+  content_hash: string;
+  status: DocumentStatus;
+  page_count: number | null;
+  text_char_count: number | null;
+  chunk_count: number;
+  extraction_metadata: DocumentExtractionMetadata;
+  error_message: string | null;
+  processing_started_at: string | null;
+  processing_completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Queue state attached to a document detail response. */
+export interface DocumentJobInfo {
+  status: 'pending' | 'claimed' | 'completed' | 'failed';
+  attempts: number;
+  max_attempts: number;
+  next_attempt_at: string;
+  failed_at: string | null;
+  error_message: string | null;
+}
+
+/** Response for `GET /api/documents/:id`. */
+export interface DocumentDetailsResponse {
+  document: KnowledgeDocument;
+  job: DocumentJobInfo | null;
+}
+
+/** Response for `GET /api/documents`. */
+export interface DocumentListResponse {
+  documents: KnowledgeDocument[];
+  count: number;
+}
+
+/** Response for `POST /api/documents` (201). */
+export interface DocumentUploadResponse {
+  document: KnowledgeDocument;
+}
+
+/** Response body for a 409 duplicate upload. */
+export interface DuplicateDocumentError {
+  error: string;
+  existing_document_id: string;
+}
+
+/** One chunk preview shown in the document detail panel. */
+export interface DocumentChunkPreview {
+  id: string;
+  chunk_index: number;
+  page_start: number | null;
+  page_end: number | null;
+  heading: string | null;
+  section_path: string | null;
+  paragraph_start: number | null;
+  paragraph_end: number | null;
+  char_start: number | null;
+  char_end: number | null;
+  token_estimate: number | null;
+  /** Truncated text for display; full text is never sent in list views. */
+  preview: string;
+}
+
+/** Response for `GET /api/documents/:id/chunks`. */
+export interface DocumentChunkListResponse {
+  chunks: DocumentChunkPreview[];
+  count: number;
+}
+
+/** One semantic search hit from `POST /api/documents/search`. */
+export interface DocumentSearchHit {
+  chunk_id: string;
+  document_id: string;
+  filename: string;
+  chunk_index: number;
+  page_start: number | null;
+  page_end: number | null;
+  heading: string | null;
+  section_path: string | null;
+  similarity: number;
+  preview: string;
+}
+
+/** Response for `POST /api/documents/search`. */
+export interface DocumentSearchResponse {
+  chunks: DocumentSearchHit[];
+  count: number;
+}
+
+/** Response for `GET /api/documents/:id/view`. */
+export interface DocumentViewResponse {
+  /** Short-lived signed URL, or an authenticated content route in local mode. */
+  url: string;
+  extension: DocumentExtension;
+  page_count: number | null;
+  /** Signed-URL lifetime in seconds (0 for the local content route). */
+  expires_in: number;
 }

@@ -29,6 +29,7 @@ import reminderRoutes from './routes/reminder.routes.js';
 import meRoutes from './routes/me.routes.js';
 import integrationRoutes from './routes/integration.routes.js';
 import memoryRoutes from './routes/memory.routes.js';
+import documentRoutes from './routes/document.routes.js';
 import { AuthError } from './services/auth.service.js';
 import { AiServiceError } from './services/ai.service.js';
 
@@ -95,6 +96,7 @@ export function createApp(): Express {
   app.use('/api/me', meRoutes);
   app.use('/api/integrations', integrationRoutes);
   app.use('/api/memories', memoryRoutes);
+  app.use('/api/documents', documentRoutes);
 
   // 404 handler for unmatched routes.
   app.use((req: Request, res: Response) => {

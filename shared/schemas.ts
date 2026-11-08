@@ -194,6 +194,17 @@ export const chatRequestSchema = z.object({
     .trim()
     .min(1, 'message must be at least 1 character')
     .max(4000, 'message must be at most 4000 characters'),
+  /**
+   * Knowledge Base scope. UUIDs are verified against the caller's own
+   * READY documents server-side; foreign/unknown ids are ignored.
+   * Capped at 20 to keep the retrieval call bounded.
+   */
+  document_ids: z
+    .array(z.string().uuid('document_ids must contain uuids'))
+    .max(20, 'at most 20 documents may be selected')
+    .optional(),
+  /** Force document retrieval when the message has no obvious cue. */
+  use_documents: z.boolean().optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -337,6 +348,77 @@ export const memorySettingsSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Knowledge Base (Milestone 5)
+// ---------------------------------------------------------------------------
+
+/** Mirrors the `extension` CHECK constraint in 0011. */
+export const documentExtensionSchema = z.enum(['pdf', 'docx', 'txt']);
+
+/** Mirrors the `status` CHECK constraint in 0011. */
+export const documentStatusSchema = z.enum([
+  'uploaded',
+  'pending',
+  'processing',
+  'ready',
+  'failed',
+  'deleting',
+  'deleted',
+]);
+
+/** Schema for the `:id` path parameter of document routes. */
+export const documentIdParamSchema = z.object({
+  id: z.string().uuid('id must be a valid uuid'),
+});
+
+/**
+ * Schema for `GET /api/documents`.
+ *
+ * `q` is a simple case-insensitive filename filter. The upload date is
+ * never client-supplied; ordering is server-side.
+ */
+export const documentListQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+  type: documentExtensionSchema.optional(),
+  status: documentStatusSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  offset: z.coerce.number().int().min(0).max(100000).optional(),
+});
+
+/**
+ * Schema for `PATCH /api/documents/:id` (rename only).
+ *
+ * SECURITY: no `status`, `user_id` or storage fields — lifecycle and
+ * ownership are server-controlled. Unknown keys are stripped by Zod.
+ */
+export const documentRenameSchema = z.object({
+  original_filename: z
+    .string()
+    .trim()
+    .min(1, 'original_filename must be at least 1 character')
+    .max(255, 'original_filename must be at most 255 characters'),
+});
+
+/**
+ * Schema for `POST /api/documents/search`.
+ *
+ * SECURITY: no `user_id` field; retrieval is always scoped to the
+ * verified bearer token.
+ */
+export const documentSearchSchema = z.object({
+  query: z
+    .string()
+    .trim()
+    .min(1, 'query must be at least 1 character')
+    .max(2000, 'query must be at most 2000 characters'),
+  document_ids: z
+    .array(z.string().uuid('document_ids must contain uuids'))
+    .max(20, 'at most 20 documents may be selected')
+    .optional(),
+  threshold: z.number().min(0).max(1).optional(),
+  max_results: z.number().int().min(1).max(50).optional(),
+});
+
+// ---------------------------------------------------------------------------
 // Inferred TypeScript types
 // ---------------------------------------------------------------------------
 
@@ -350,3 +432,6 @@ export type UpdateReminderInputValidated = z.infer<typeof updateReminderSchema>;
 export type ListRemindersQueryValidated = z.infer<typeof listRemindersQuerySchema>;
 export type PatchProfileValidated = z.infer<typeof patchProfileSchema>;
 export type GrantIntegrationValidated = z.infer<typeof grantIntegrationSchema>;
+export type DocumentListQueryValidated = z.infer<typeof documentListQuerySchema>;
+export type DocumentRenameValidated = z.infer<typeof documentRenameSchema>;
+export type DocumentSearchValidated = z.infer<typeof documentSearchSchema>;
