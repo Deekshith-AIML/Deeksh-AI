@@ -35,6 +35,7 @@ import { createAdminClient } from './services/supabase.service.js';
 import { getEmailProvider } from './services/email/index.js';
 import { startScheduler } from './scheduler/reminder.worker.js';
 import { startExtractionScheduler } from './workers/extraction.scheduler.js';
+import { startDocumentScheduler } from './workers/document.scheduler.js';
 
 function main(): void {
   const client = createAdminClient(); // throws if SUPABASE_SERVICE_ROLE_KEY missing
@@ -42,19 +43,21 @@ function main(): void {
 
   const reminderHandle = startScheduler({ client, email });
   const extractionHandle = startExtractionScheduler({ client });
+  const documentHandle = startDocumentScheduler({ client });
 
   console.log(
     `[worker] Reminder scheduler started (email provider: ${email.name}, ` +
       `interval 60s).`,
   );
   console.log('[worker] Memory-extraction scheduler started (interval 10s).');
+  console.log('[worker] Document-processing scheduler started (interval 5s).');
 
   let shuttingDown = false;
   const shutdown = (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[worker] ${signal} received — waiting for in-flight work…`);
-    Promise.allSettled([reminderHandle.stop(), extractionHandle.stop()])
+    Promise.allSettled([reminderHandle.stop(), extractionHandle.stop(), documentHandle.stop()])
       .then((results) => {
         const rejected = results.filter((r) => r.status === 'rejected');
         if (rejected.length > 0) {

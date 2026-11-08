@@ -75,7 +75,7 @@ export async function embedAndPersistChunks(
   async function worker() {
     while (cursor < chunks.length) {
       const idx = cursor++;
-      const chunk = chunks[idx];
+      const chunk = chunks[idx]!;
       try {
         const embedding = await embed(chunk.content, { role: 'document' });
         assertStorableInIndex(

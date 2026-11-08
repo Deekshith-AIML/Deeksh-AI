@@ -150,7 +150,7 @@ export function chunkDocument(
   }
 
   for (let i = 0; i < paragraphs.length; i++) {
-    const para = paragraphs[i];
+    const para = paragraphs[i]!;
     const paraText = para.text;
     const paraProvenance = para.provenance;
 
