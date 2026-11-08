@@ -57,7 +57,26 @@ export function ChatBubble({ message }: ChatBubbleProps) {
         {message.isLoading ? (
           <TypingIndicator />
         ) : (
-          <p className="whitespace-pre-wrap break-words">{message.content}</p>
+          <>
+            <p className="whitespace-pre-wrap break-words">{message.content}</p>
+            {message.sources && message.sources.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {message.sources.map((src) => (
+                  <a
+                    key={src.marker}
+                    href={`/documents/${src.document_id}/view`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-300"
+                    title={src.heading ?? undefined}
+                  >
+                    {src.marker}: {src.filename}
+                    {src.page ? ` p.${src.page}` : ''}
+                  </a>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
 

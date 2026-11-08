@@ -25,6 +25,7 @@ import { create } from 'zustand';
 import api from '@/lib/api';
 import { useTaskStore } from './useTaskStore';
 import { useReminderStore } from './useReminderStore';
+import { useDocumentStore } from './useDocumentStore';
 import type { ChatMessage, ChatResponse } from '@/types';
 
 // ---------------------------------------------------------------------------
@@ -91,11 +92,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     try {
       // 2. POST /chat — identity comes from the bearer token (attached by
-      //    the Axios interceptor); the body contains only the message.
-      //    The backend runs the AI tool-calling loop and may create a
-      //    task in Supabase before replying.
+      //    the Axios interceptor); the body contains the message plus any
+      //    selected document ids for Knowledge Base scoping.
+      const selectedDocIds = useDocumentStore.getState().selectedIds;
       const { data } = await api.post<ChatResponse>('/chat', {
         message: trimmed,
+        document_ids: selectedDocIds.length > 0 ? selectedDocIds : undefined,
+        use_documents: selectedDocIds.length > 0 ? true : undefined,
       });
 
       // 3. Replace the loading bubble with the real assistant reply.
@@ -108,6 +111,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 content: data.reply,
                 created_at: new Date().toISOString(),
                 isLoading: false,
+                sources: data.sources,
               }
             : m,
         ),

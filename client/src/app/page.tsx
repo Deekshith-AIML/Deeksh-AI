@@ -16,6 +16,7 @@ import ChatInput from '@/components/chat/ChatInput';
 import KanbanBoard from '@/components/tasks/KanbanBoard';
 import ReminderPanel from '@/components/reminders/ReminderPanel';
 import MemoryPanel from '@/components/memory/MemoryPanel';
+import KnowledgeBasePanel from '@/components/documents/KnowledgeBasePanel';
 import AuthGate from '@/components/auth/AuthGate';
 import AccountMenu from '@/components/auth/AccountMenu';
 import { useChatStore } from '@/store/useChatStore';
@@ -106,6 +107,7 @@ function Dashboard() {
             <ReminderPanel />
             {/* Long-term memory dashboard (Milestone 4). */}
             <MemoryPanel />
+            <KnowledgeBasePanel />
             <KanbanBoard />
           </div>
         </section>

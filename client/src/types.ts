@@ -26,6 +26,123 @@ export type MessageRole = 'user' | 'assistant' | 'system';
 export type ReminderStatus = 'pending' | 'claimed' | 'sent' | 'failed' | 'cancelled';
 
 // ---------------------------------------------------------------------------
+// Knowledge Base (Milestone 5)
+// ---------------------------------------------------------------------------
+
+export type DocumentStatus =
+  | 'uploaded'
+  | 'pending'
+  | 'processing'
+  | 'ready'
+  | 'failed'
+  | 'deleting'
+  | 'deleted';
+
+export type DocumentExtension = 'pdf' | 'docx' | 'txt';
+
+export type DocumentMimeType =
+  | 'application/pdf'
+  | 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  | 'text/plain';
+
+export interface DocumentExtractionMetadata {
+  encoding?: string;
+  scanned?: boolean;
+  paragraphs?: number;
+  headings?: number;
+  tables?: number;
+  pages_with_text?: number;
+  truncated?: boolean;
+}
+
+export interface KnowledgeDocument {
+  id: string;
+  original_filename: string;
+  extension: DocumentExtension;
+  mime_type: DocumentMimeType;
+  file_size: number;
+  content_hash: string;
+  status: DocumentStatus;
+  page_count: number | null;
+  text_char_count: number | null;
+  chunk_count: number;
+  extraction_metadata: DocumentExtractionMetadata;
+  error_message: string | null;
+  processing_started_at: string | null;
+  processing_completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DocumentJobInfo {
+  status: 'pending' | 'claimed' | 'completed' | 'failed';
+  attempts: number;
+  max_attempts: number;
+  next_attempt_at: string;
+  failed_at: string | null;
+  error_message: string | null;
+}
+
+export interface DocumentDetailsResponse {
+  document: KnowledgeDocument;
+  job: DocumentJobInfo | null;
+}
+
+export interface DocumentListResponse {
+  documents: KnowledgeDocument[];
+  count: number;
+}
+
+export interface DocumentUploadResponse {
+  document: KnowledgeDocument;
+}
+
+export interface DocumentChunkPreview {
+  id: string;
+  chunk_index: number;
+  page_start: number | null;
+  page_end: number | null;
+  heading: string | null;
+  section_path: string | null;
+  paragraph_start: number | null;
+  paragraph_end: number | null;
+  char_start: number | null;
+  char_end: number | null;
+  token_estimate: number | null;
+  preview: string;
+}
+
+export interface DocumentChunkListResponse {
+  chunks: DocumentChunkPreview[];
+  count: number;
+}
+
+export interface DocumentSearchHit {
+  chunk_id: string;
+  document_id: string;
+  filename: string;
+  chunk_index: number;
+  page_start: number | null;
+  page_end: number | null;
+  heading: string | null;
+  section_path: string | null;
+  similarity: number;
+  preview: string;
+}
+
+export interface DocumentSearchResponse {
+  chunks: DocumentSearchHit[];
+  count: number;
+}
+
+export interface DocumentViewResponse {
+  url: string;
+  extension: DocumentExtension;
+  page_count: number | null;
+  expires_in: number;
+}
+
+// ---------------------------------------------------------------------------
 // Database row interfaces
 // ---------------------------------------------------------------------------
 
@@ -98,6 +215,8 @@ export interface ChatMessage {
   created_at?: string;
   /** True while the assistant reply is still being generated. */
   isLoading?: boolean;
+  /** Resolvable document citations (Knowledge Base answers). */
+  sources?: DocumentSource[];
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +248,19 @@ export interface UpdateTaskInput {
  */
 export interface ChatRequest {
   message: string;
+  document_ids?: string[];
+  use_documents?: boolean;
+}
+
+/** One resolvable citation returned with a chat reply. */
+export interface DocumentSource {
+  marker: string;
+  document_id: string;
+  chunk_id: string;
+  filename: string;
+  page: number | null;
+  heading: string | null;
+  similarity: number;
 }
 
 /** Successful response returned by `POST /api/chat`. */
@@ -140,6 +272,8 @@ export interface ChatResponse {
     completion_tokens: number;
     total_tokens: number;
   };
+  sources?: DocumentSource[];
+  document_context_used?: boolean;
 }
 
 /** Standard error envelope returned by failing endpoints. */
