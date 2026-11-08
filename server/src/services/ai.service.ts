@@ -45,7 +45,9 @@ import * as reminderService from './reminder.service.js';
 import * as dateService from './date.service.js';
 import * as memoryService from './memory.service.js';
 import { embed } from './embedding.service.js';
-import type { ChatResponse, MessageRole } from '../../../shared/types.js';
+import * as documentRetrieval from './documents/retrieval.service.js';
+import { getDocumentsConfig } from '../config/documents.config.js';
+import type { ChatResponse, DocumentSource, MessageRole } from '../../../shared/types.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -831,6 +833,7 @@ export async function chat(
   userId: string,
   message: string,
   sourceMessageId: string | null = null,
+  options?: { documentIds?: string[]; useDocuments?: boolean },
 ): Promise<ChatResponse> {
   // 1. Server-authoritative history (never client-supplied).
   const history = await loadRecentHistory(client, userId);
@@ -846,16 +849,82 @@ export async function chat(
   //     stays untrusted reference data, not an instruction. The system
   //     prompt already carries the isolation rules.
   let userContent = message;
+  let documentSources: DocumentSource[] = [];
+  let documentContextUsed = false;
   try {
     // role 'query' applies the official asymmetric retrieval format so the
     // query side matches how memories were embedded as documents (M4.1).
     const queryEmbedding = await embed(message, { mock: process.env.NODE_ENV === 'test', role: 'query' });
+
+    // Memory context (existing, unchanged).
     const memoryContext = await memoryService.loadChatMemoryContext(client, userId, queryEmbedding, message);
     if (memoryContext) {
       userContent = `${message}\n\n${memoryContext}`;
     }
+
+    // Document context (Milestone 5). Heuristic + explicit selection;
+    // no extra LLM routing call.
+    const config = getDocumentsConfig();
+    const explicitIds = options?.documentIds?.filter(Boolean) ?? [];
+    const forceDocs = options?.useDocuments === true;
+    const hasDocCue = /document|pdf|file|uploaded|according to|summarize|what does .* say|compare/i.test(message);
+
+    // Check if user has any ready documents (best-effort).
+    let hasReadyDocs = false;
+    try {
+      const { data } = await client
+        .from('documents')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('status', 'ready')
+        .limit(1);
+      hasReadyDocs = Array.isArray(data) && data.length > 0;
+    } catch {
+      hasReadyDocs = false;
+    }
+
+    const shouldRetrieve =
+      hasReadyDocs && (explicitIds.length > 0 || forceDocs || hasDocCue);
+
+    if (shouldRetrieve) {
+      const hits = await documentRetrieval.searchDocumentChunks(client, userId, queryEmbedding, {
+        documentIds: explicitIds.length > 0 ? explicitIds : undefined,
+        threshold: config.retrievalThreshold,
+        maxResults: config.chatTopK,
+      });
+
+      if (hits.length > 0) {
+        documentContextUsed = true;
+        // Build the labelled context block (appended to user turn).
+        const contextLines: string[] = [];
+        const markerMap = new Map<string, typeof hits[0]>();
+        hits.forEach((hit, idx) => {
+          const marker = `S${idx + 1}`;
+          markerMap.set(marker, hit);
+          const pagePart = hit.pageStart ? `page: ${hit.pageStart}` : 'page: n/a';
+          const headingPart = hit.heading ? `section: ${hit.heading}` : '';
+          contextLines.push(
+            `[${marker}] file: ${hit.filename} | ${pagePart}${headingPart ? ' | ' + headingPart : ''}\n${hit.content}`,
+          );
+        });
+
+        const contextBlock = `<document_context untrusted="true">\n${contextLines.join('\n\n')}\n</document_context>`;
+        userContent = `${userContent}\n\n${contextBlock}`;
+
+        // Build sources (only resolvable markers).
+        documentSources = hits.map((hit, idx) => ({
+          marker: `S${idx + 1}`,
+          document_id: hit.documentId,
+          chunk_id: hit.chunkId,
+          filename: hit.filename,
+          page: hit.pageStart,
+          heading: hit.heading,
+          similarity: hit.similarity,
+        }));
+      }
+    }
   } catch (err) {
-    console.warn('[ai.service] memory context skipped (non-fatal):', err instanceof Error ? err.message : err);
+    console.warn('[ai.service] document context skipped (non-fatal):', err instanceof Error ? err.message : err);
   }
 
   const messages: ChatCompletionMessageParam[] = [
@@ -947,5 +1016,7 @@ export async function chat(
     reply: finalContent ?? "I'm sorry, I couldn't generate a response.",
     model: `${toolRoundProvider}:${finalModel}`,
     usage: finalUsage,
+    sources: documentSources.length > 0 ? documentSources : undefined,
+    document_context_used: documentContextUsed,
   };
 }

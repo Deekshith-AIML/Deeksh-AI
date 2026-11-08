@@ -39,7 +39,10 @@ export async function chatHandler(req: Request, res: Response, next: NextFunctio
     // 4. Run the OpenAI chat + tool-calling loop. History is loaded inside
     //    the service, scoped to `userId`. Upstream failures surface as
     //    AiServiceError with a client-safe message.
-    const response: ChatResponse = await aiService.chat(db, userId, parsed.data.message, messageId ?? null);
+    const response: ChatResponse = await aiService.chat(db, userId, parsed.data.message, messageId ?? null, {
+      documentIds: parsed.data.document_ids,
+      useDocuments: parsed.data.use_documents,
+    });
 
     // 5. Persist the assistant's reply (best-effort).
     const assistantId = await aiService.saveMessage(db, userId, 'assistant', response.reply);
