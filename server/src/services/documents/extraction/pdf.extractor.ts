@@ -16,7 +16,7 @@ import type { DocumentsConfig } from '../../../config/documents.config.js';
 import type { DocumentExtractionMetadata } from '../../../../../shared/types.js';
 import type { RawExtraction, RawParagraph } from './index.js';
 
-import pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 const pdfDocApi: any = pdfjsLib;
 
@@ -26,7 +26,7 @@ export async function extractPdf(
 ): Promise<RawExtraction> {
   let doc: any;
   try {
-    doc = await pdfDocApi.getDocument({ data: bytes, verbosity: 0 }).promise;
+    doc = await pdfDocApi.getDocument({ data: new Uint8Array(bytes), verbosity: 0 }).promise;
   } catch (err) {
     throw new Error(`Failed to parse PDF: ${(err as Error).message}`);
   }

@@ -46,9 +46,17 @@ function decodeTextSafe(bytes: Buffer): DecodedText {
     return { text, encoding: 'utf-16le' };
   }
 
-  // UTF-16BE BOM.
+  // UTF-16BE BOM — Node TextDecoder has no utf-16be, so swap byte pairs
+  // and decode as utf-16le.
   if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
-    const text = new TextDecoder('utf-16be').decode(bytes.slice(2));
+    const swapped = Buffer.alloc(bytes.length - 2);
+    for (let i = 2; i + 1 < bytes.length; i += 2) {
+      const b1 = bytes[i + 1] as number;
+      const b0 = bytes[i] as number;
+      swapped[i - 2] = b1;
+      swapped[i - 1] = b0;
+    }
+    const text = new TextDecoder('utf-16le').decode(swapped);
     return { text, encoding: 'utf-16be' };
   }
 
