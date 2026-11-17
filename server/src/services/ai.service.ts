@@ -990,6 +990,70 @@ function repairToolCalls(message: ChatCompletionMessage): ChatCompletionMessage 
 }
 
 // ---------------------------------------------------------------------------
+// Few-shot tool demonstration (chat reliability fix)
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonical tool exchanges shown before the real conversation.
+ *
+ * Local Ollama (`mistral:latest`) given ONLY the TaskMate system prompt
+ * never emits `tool_calls` (0/8 observed runs): it replies with plain text
+ * like "Task created" while nothing is persisted — the exact hallucination
+ * `repairToolCalls()` was written to catch, except there is nothing to
+ * repair. Showing one worked example per tool flips behaviour to the
+ * recoverable form (`[TOOL_CALLS] [...]` in content or proper `tool_calls`)
+ * in 12/13 observed runs, while greetings stay text-only (no tool call).
+ *
+ * Messages use the fixed fake ids `call_demo*` so tests can tell the
+ * demonstration apart from real tool results. The demo teaches the
+ * reminder_at argument separately from due_date; the server still resolves
+ * reminder phrases authoritatively.
+ */
+const FEW_SHOT_DEMO: ChatCompletionMessageParam[] = [
+  { role: 'user', content: 'Create a task water the plants' },
+  {
+    role: 'assistant',
+    content: null,
+    tool_calls: [
+      {
+        id: 'call_demo1',
+        type: 'function',
+        function: { name: 'create_task', arguments: '{"title":"Water the plants","priority":"medium"}' },
+      },
+    ],
+  } as ChatCompletionMessageParam,
+  {
+    role: 'tool',
+    tool_call_id: 'call_demo1',
+    content:
+      '{"success":true,"task":{"id":"11111111-1111-4111-8111-111111111111","title":"Water the plants","status":"todo","priority":"medium"}}',
+  } as ChatCompletionMessageParam,
+  { role: 'assistant', content: 'Done — I created the task "Water the plants" (priority: medium).' },
+  { role: 'user', content: 'Remind me to call the dentist next Monday at 10 AM' },
+  {
+    role: 'assistant',
+    content: null,
+    tool_calls: [
+      {
+        id: 'call_demo2',
+        type: 'function',
+        function: {
+          name: 'create_task',
+          arguments: '{"title":"Call the dentist","reminder_at":"next Monday at 10 AM","priority":"medium"}',
+        },
+      },
+    ],
+  } as ChatCompletionMessageParam,
+  {
+    role: 'tool',
+    tool_call_id: 'call_demo2',
+    content:
+      '{"success":true,"task":{"id":"22222222-2222-4222-8222-222222222222","title":"Call the dentist","status":"todo","priority":"medium"},"reminder":{"id":"33333333-3333-4333-8333-333333333333","status":"scheduled"}}',
+  } as ChatCompletionMessageParam,
+  { role: 'assistant', content: "Done — you'll get an email reminder to 'Call the dentist' next Monday at 10 AM." },
+];
+
+// ---------------------------------------------------------------------------
 // Main chat function
 // ---------------------------------------------------------------------------
 
@@ -1104,6 +1168,7 @@ export async function chat(
 
   const messages: ChatCompletionMessageParam[] = [
     { role: 'system', content: buildSystemPrompt(userId, { now: timeString, timezone: 'Asia/Kolkata' }) },
+    ...FEW_SHOT_DEMO,
     ...history.map(
       (turn): ChatCompletionMessageParam =>
         ({ role: turn.role, content: turn.content }) as ChatCompletionMessageParam,

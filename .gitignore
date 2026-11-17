@@ -24,3 +24,6 @@ npm-debug.log*
 # Local smoke-test output
 server/boot.err
 server/evaluation-results/
+
+# Runtime upload storage (documents)
+.local-storage/

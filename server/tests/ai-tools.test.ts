@@ -64,12 +64,14 @@ const TOKEN = 'headerT.payloadT.signatureT';
 const USER = '11111111-1111-4111-8111-111111111111';
 const OTHER_USER = '22222222-2222-4222-8222-222222222222';
 
-type Msg = { role: string; content?: string | null };
+type Msg = { role: string; content?: string | null; tool_call_id?: string };
 
-/** Tool messages present in a captured completion request. */
+/** Tool messages present in a captured completion request (excludes the few-shot demo). */
 function toolMessagesOf(callIndex: number): Msg[] {
   const call = openaiCreate.mock.calls[callIndex]?.[0] as { messages: Msg[] };
-  return call.messages.filter((m) => m.role === 'tool');
+  return call.messages.filter(
+    (m) => m.role === 'tool' && !String(m.tool_call_id ?? '').startsWith('call_demo'),
+  );
 }
 
 describe('create_task tool execution', () => {
@@ -464,7 +466,9 @@ describe('Gemini provider configuration', () => {
     const second = openaiCreate.mock.calls[1]?.[0] as {
       messages: Array<{ role: string; tool_call_id?: string; content?: string | null }>;
     };
-    const toolMsg = second.messages.find((m) => m.role === 'tool');
+    const toolMsg = second.messages.find(
+      (m) => m.role === 'tool' && !String(m.tool_call_id ?? '').startsWith('call_demo'),
+    );
     expect(toolMsg).toBeDefined();
     expect(toolMsg!.tool_call_id).toBeTruthy();
     expect(JSON.parse(String(toolMsg!.content)).success).toBe(true);

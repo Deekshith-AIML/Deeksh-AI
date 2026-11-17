@@ -175,7 +175,10 @@ describe('chat identity isolation', () => {
     const secondCall = openaiCreate.mock.calls[1]?.[0] as {
       messages: Array<{ role: string; content?: string | null }>;
     };
-    const toolMessages = secondCall.messages.filter((m) => m.role === 'tool');
+    const toolMessages = secondCall.messages.filter(
+      (m: { role: string; tool_call_id?: string }) =>
+        m.role === 'tool' && !String(m.tool_call_id ?? '').startsWith('call_demo'),
+    );
     expect(toolMessages).toHaveLength(1);
     expect(JSON.parse(String(toolMessages[0]!.content)).success).toBe(true);
   });

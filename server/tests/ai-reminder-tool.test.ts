@@ -72,12 +72,14 @@ const USER = '11111111-1111-4111-8111-111111111111';
 /** Frozen clock: Friday 2026-10-23 09:30 IST. */
 const FROZEN = '2026-10-23T09:30:00+05:30';
 
-type Msg = { role: string; content?: string | null };
+type Msg = { role: string; content?: string | null; tool_call_id?: string };
 
-/** Tool messages present in a captured completion request. */
+/** Tool messages present in a captured completion request (excludes the few-shot demo). */
 function toolMessagesOf(callIndex: number): Msg[] {
   const call = openaiCreate.mock.calls[callIndex]?.[0] as { messages: Msg[] };
-  return call.messages.filter((m) => m.role === 'tool');
+  return call.messages.filter(
+    (m) => m.role === 'tool' && !String(m.tool_call_id ?? '').startsWith('call_demo'),
+  );
 }
 
 function toolResult(callIndex = 1): Record<string, unknown> {
