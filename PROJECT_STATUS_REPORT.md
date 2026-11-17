@@ -1,8 +1,18 @@
 # DEEKSH AI — Project Status Report
 
-**Milestone:** 4.2 — Stabilization & Production Readiness
-**Date:** 2026-11-08
-**Status:** Milestone 4.2 complete. Milestone 5 **not started** (out of scope).
+**Milestone:** 5 — Personal Knowledge Base & RAG (Phase 12 evaluation)
+**Date:** 2026-11-10 (M5) / 2026-11-13 (M6 Phase 6 update)
+**Status:** Milestone 5 implemented through Phase 12. Deterministic evaluation
+and all six gates green. Live document RAG verification **blocked** by missing
+Supabase service-role configuration.
+
+**Milestone 6 update (2026-11-13):** Phases 0–6 of the Multi-Agent
+Orchestration Engine are complete — including Phase 6 (human approval +
+secure execution: approval lifecycle, immutable payload binding, fail-closed
+execution gate, authenticated `/api/approvals` API, all 16 mandated security
+scenarios). Server suite: **618/618 passed, 43 files**; all six gates green.
+Migration `0013_agent_workflows.sql` remains **unapplied to any live DB**
+(SQL inspection only). Phase 7 not started. See `MILESTONE_6_REPORT.md`.
 
 This report is evidence-based. Every claim below is labelled:
 
@@ -61,8 +71,11 @@ independently.
 | Hybrid memory retrieval (vector + full-text) | Implemented, tested, live verified |
 | Memory dashboard (search, filters, review, supersede) | Implemented |
 | Integration grants (Google login kept separate) | Implemented, tested |
+| Document upload, extraction, chunking and durable processing (PDF/DOCX/TXT) | Implemented, tested |
+| Document retrieval (pgvector), citations and RAG answers | Implemented, tested (mocked answers); live E2E blocked |
+| Knowledge Base UI (list, search, citation viewer) | Implemented, build-verified |
 
-Explicitly **not** implemented (scope control): PDF/DOCX upload, full RAG,
+Explicitly **not** implemented (scope control): OCR, malware scanning,
 multi-agent orchestration, Gmail API, Google Calendar API, WhatsApp, YouTube.
 
 ---
@@ -76,7 +89,9 @@ multi-agent orchestration, Gmail API, Google Calendar API, WhatsApp, YouTube.
 | M3 | Google authentication + multi-user security | Complete |
 | M4 | Hybrid memory infrastructure | Complete |
 | M4.1 | Memory intelligence + retrieval evaluation | Complete |
-| M4.2 | Stabilization + production readiness | **This report** |
+| M4.2 | Stabilization + production readiness | Complete |
+| M5 | Personal Knowledge Base + RAG (Phases 1–11) | Complete |
+| M5 Phase 12 | Document RAG evaluation | Deterministic evaluation complete; live E2E blocked |
 
 ---
 
@@ -115,15 +130,20 @@ multi-agent orchestration, Gmail API, Google Calendar API, WhatsApp, YouTube.
 | `0008_match_memories_category_and_conflict_link.sql` | category filter + conflict link | applied |
 | `0009_match_memories_hybrid_lexical.sql` | hybrid retrieval + FTS index + grants | **applied 2026-11-08** |
 | `0010_service_role_worker_grants.sql` | least-privilege worker grants | **applied 2026-11-08** |
+| `0011_documents_schema.sql` | documents, chunks (`vector(1536)` + HNSW), jobs, RLS, `match_document_chunks`, worker functions | requires live DB for verification |
+| `0012_documents_storage.sql` | private `documents` bucket + storage policies (guarded) | requires live DB/Storage for verification |
 
 There is **no** `supabase_migrations.schema_migrations` table locally;
 migration state was determined by inspecting the actual schema, then only the
-genuinely missing migrations (0009, 0010) were applied. No migration was
-blindly re-run, no database was dropped, no user table was truncated.
+genuinely missing migrations were applied. No migration was blindly re-run, no
+database was dropped, no user table was truncated. Migrations 0011–0012 have
+not been exercised against a live Supabase project in this phase.
 
-**Tables:** 9 in `public` (`users`, `tasks`, `messages`, `reminders`,
-`memories`, `memory_settings`, `memory_extraction_jobs`, `integration_grants`,
-`memory_dedupe_audit`).
+**Tables:** 9 in `public` for M1–M4.2 (`users`, `tasks`, `messages`,
+`reminders`, `memories`, `memory_settings`, `memory_extraction_jobs`,
+`integration_grants`, `memory_dedupe_audit`), plus M5's `documents`,
+`document_chunks` and `document_processing_jobs` once migration 0011 is
+applied.
 
 **Memory indexes:**
 
@@ -134,8 +154,12 @@ blindly re-run, no database was dropped, no user table was truncated.
 - `idx_memories_user_category_active`, `idx_memories_conflict_with`,
   `idx_memories_source_message` — supporting indexes.
 
-**RLS:** 29 policies across all user tables. Every table has
-`auth.uid() = user_id` SELECT/INSERT/UPDATE/DELETE policies.
+**Document indexes:** HNSW cosine index on `document_chunks.embedding`, plus
+user/document/chunk-index and pending-job indexes (migration 0011).
+
+**RLS:** policies exist on all user tables. Every table has
+`auth.uid() = user_id` SELECT/INSERT/UPDATE/DELETE policies; document tables
+add the same ownership model and storage policies are scoped per user folder.
 
 **Local data note:** the local DB contains 6 fixture users, 2 tasks, 15
 legacy reminder fixtures, and 40 synthetic benchmark memories. **These are
@@ -266,6 +290,16 @@ All routes except `/health` require `Authorization: Bearer <Supabase JWT>`.
 | PATCH | `/api/memories/:id` | correct memory |
 | DELETE | `/api/memories/:id` | delete memory |
 | POST | `/api/memories/:id/supersede` | confirm supersession |
+| POST | `/api/documents` | upload PDF/DOCX/TXT (25 MiB) |
+| GET | `/api/documents` | list/filter documents |
+| GET | `/api/documents/:id` | details + processing job |
+| PATCH | `/api/documents/:id` | rename |
+| DELETE | `/api/documents/:id` | delete (chunks, jobs, object) |
+| POST | `/api/documents/:id/retry` | retry a failed document |
+| GET | `/api/documents/:id/view` | short-lived signed view link |
+| GET | `/api/documents/:id/content` | authenticated local content |
+| GET | `/api/documents/:id/chunks` | chunk preview with provenance |
+| POST | `/api/documents/search` | semantic search over ready documents |
 
 ---
 
@@ -274,18 +308,19 @@ All routes except `/health` require `Authorization: Bearer <Supabase JWT>`.
 Commands (PowerShell-compatible):
 
 ```powershell
-npm test --prefix server     # 294 / 294 passed, 20 files
-npm run typecheck            # server + client: clean
-npm run build:server         # clean
-npx tsc --noEmit             # client: clean (also run by build:client)
-npm run build:client         # Next.js production build: success
+npm test --prefix server                         # 459 / 459 passed, 36 files
+npm run typecheck --prefix server                # source + test configs: clean
+server\node_modules\.bin\tsc.cmd --noEmit -p server/tsconfig.test.json  # clean
+npm run typecheck --prefix client                # clean
+npm run build:server                             # clean
+npm run build:client                             # Next.js production build: success
 ```
 
 | Gate | Result |
 |---|---|
-| Server tests | **294 passed / 294** (291 baseline preserved + 3 new hybrid tests) |
-| Test files | 20 / 20 |
-| Server typecheck | clean |
+| Server tests | **459 passed / 459** (433 pre-existing preserved + 26 Phase 12 tests) |
+| Test files | 36 / 36 |
+| Server typecheck (source + tests) | clean |
 | Client typecheck | clean |
 | Server build | clean |
 | Client build | 6 routes generated, no errors |
@@ -293,7 +328,10 @@ npm run build:client         # Next.js production build: success
 
 Coverage spans authentication, tasks, reminders (including worker), memory
 API, extraction worker/scheduler, embeddings, chat isolation and fallback,
-OAuth callbacks/security, profile, integrations and metric regression tests.
+OAuth callbacks/security, profile, integrations, document upload/extraction/
+chunking/worker/deletion/search/citation navigation, metric regression tests,
+and the Phase 12 document-RAG dataset, metrics, answer-path isolation and edge
+cases.
 
 ---
 
@@ -319,6 +357,23 @@ lexical matches (40 exact-token queries); semantic-query quality was already
 improvement is consistent and non-regressing, hybrid is kept, but it is only
 activated when a query string is supplied — omitting `query_text` preserves
 the old behaviour exactly.
+
+### Document RAG — evaluation status (Phase 12)
+
+| Area | Result |
+|---|---|
+| Dataset | 20 documents (7 PDF, 6 DOCX, 7 TXT), deterministic |
+| Queries | 72 (58 scored, 14 safety) across 10 categories |
+| Ground truth | Hand-authored anchors resolved through real extraction + chunking |
+| Metric implementations | P@5, R@5, MRR, relevant/irrelevant rates, latency p50/p95, citation/refusal rates — unit tested |
+| Live retrieval / citation / faithfulness scores | **Not computed — live run blocked** |
+| Gemini primary / Ollama fallback | Mocked equivalence verified; live quality not measured |
+| Edge cases | Scanned PDF, empty text, oversized TXT, zero chunks, deletion, worker retry/idempotency verified |
+
+The live script (`npm run eval:documents --prefix server`) is opt-in and
+requires `SUPABASE_SERVICE_ROLE_KEY`, `EVAL_USER_ID` and `EVAL_CONFIRM=yes`.
+Without them it writes an explicit blocked report and produces no scores.
+See `DOCUMENT_RAG_EVALUATION_REPORT.md`.
 
 ---
 
@@ -392,6 +447,18 @@ reminder atomic claim, stale recovery, future exclusion, cancellation.
 9. **Next.js multiple-lockfile warning** during client build (non-blocking).
 10. **Local DB contains fixtures**, including 15 legacy reminder rows and 40
     synthetic benchmark memories. They are not production data.
+11. **Document RAG live verification — blocked.** `SUPABASE_SERVICE_ROLE_KEY`
+    and `EVAL_USER_ID` are missing, and no local Docker/Supabase stack is
+    available. No live P@5 / R@5 / MRR / citation / faithfulness score exists;
+    only deterministic pipeline and metric tests were run.
+12. **No OCR and no malware scanning.** Scanned PDFs fail with
+    `SCANNED_PDF_REQUIRES_OCR`; password-protected/encrypted PDFs are
+    unsupported (encrypted DOCX ZIP entries are rejected).
+13. **Semantic citation support is not auto-judged.** A deterministic
+    expected-phrase proxy plus exported reply/citation text is used for human
+    review; no LLM-judge score is claimed.
+14. **Signed-URL expiry is not simulated.** Only the issued 120s TTL and the
+    absence of public URLs are asserted.
 
 ---
 
@@ -433,7 +500,10 @@ Never place `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`, or
 
 ## 16. Deployment requirements
 
-1. Supabase project with migrations `0001`–`0010` applied in order.
+1. Supabase project with migrations `0001`–`0012` applied in order.
+   Migration `0013_agent_workflows.sql` (agent runs/steps/approvals +
+   append-only audit, M6) is written and inspection-verified but **not yet
+   applied anywhere** — apply it only to a local/staging stack first.
 2. API server: Node ≥ 20, server env set, `npm run build` then
    `npm start`; expose `/health` for liveness.
 3. Worker: same env **plus** `SUPABASE_SERVICE_ROLE_KEY`;
@@ -460,16 +530,54 @@ Never place `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`, or
 
 ---
 
-## 18. Next development milestone
+## 18. Milestone status and next steps
 
-Milestone 5 has **not** been started. Recommended preconditions:
+### M5 — Personal Knowledge Base + RAG
 
-1. Run the same live checks against the real Supabase project once
-   `SUPABASE_SERVICE_ROLE_KEY` is configured.
-2. Verify Resend live delivery with an authorized test recipient.
-3. Address rate limiting / `helmet` / API graceful shutdown.
-4. Plan the Zod 4 upgrade.
-5. Build a paraphrase-based retrieval dataset before tuning thresholds; the
-   current benchmark over-rewards exact token matching.
+Milestone 5 is implemented through Phase 12.
+Deterministic evaluation, the full regression suite and all six gates are
+green. Live document RAG verification remains blocked: the final audit on
+2026-11-10 found `SUPABASE_SERVICE_ROLE_KEY`, `EVAL_USER_ID` and
+`EVAL_CONFIRM` missing (no local Supabase/Docker stack; no Ollama
+configuration).
 
-Then Milestone 5 can begin from a clean, documented, fully green baseline.
+**Decision: M5 is implementation-complete but not fully production-verified.
+No live retrieval, citation or answer-quality score is claimed.**
+
+### M6 — Multi-Agent Orchestration Engine (Phases 0–6)
+
+Phases 0–6 are complete: shared interfaces, registry, workflow persistence,
+orchestrator, domain agents, and human approval + secure execution.
+Server suite **618/618 passed, 43 files** (all prior baselines preserved,
+42 new Phase 6 tests covering the 16 mandated security scenarios); all six
+gates green (server tests, server typecheck source+test, server build,
+client typecheck, client build, migration/RLS inspection 12/12).
+
+**Decision: Phase 6 is implemented and tested. It is NOT live-verified —
+migration `0013_agent_workflows.sql` (extended with the approval lifecycle,
+append-only audit table, owner trigger and RLS policies) has never been
+applied to a database; RLS/trigger/partial-index behavior is verified by
+SQL inspection only, and approval E2E tests run against the in-memory fake.
+Phase 7 (recovery/error handling) has not been started. No commits or
+pushes have been made; all M5 + M6 work remains uncommitted on
+`stabilization/m4.2`.**
+
+Next steps, in order:
+
+1. Stand up a local/staging Supabase stack and apply migrations `0001`–`0013`
+   there (never to production as part of a milestone), then live-verify
+   Phase 6: RLS policies, the owner-consistency trigger, the partial unique
+   pending index, and an approval E2E against the real database.
+2. Continue M6 with Phase 7 (workflow recovery and error handling), keeping
+   all 618 server tests green and re-running all six gates per phase.
+3. Configure a dedicated synthetic test account (`EVAL_USER_ID`) and a
+   development/staging `SUPABASE_SERVICE_ROLE_KEY`, then run
+   `npm run eval:documents --prefix server` with `EVAL_CONFIRM=yes` to obtain
+   the first real P@5 / R@5 / MRR / citation / latency results.
+4. Only then evaluate whether any retrieval tuning is justified; do not tune
+   against the synthetic benchmark alone.
+5. Run the same live checks against the real Supabase project.
+6. Verify Resend live delivery with an authorized test recipient.
+7. Address remaining rate limiting / `helmet` / API graceful shutdown.
+8. Plan the Zod 4 upgrade.
+9. Build a paraphrase-based retrieval dataset before tuning thresholds.

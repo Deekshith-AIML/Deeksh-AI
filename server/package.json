@@ -15,7 +15,9 @@
     "test:watch": "vitest",
     "smoke:embeddings": "tsx scripts/embedding-smoke.ts",
     "smoke:embeddings:gemini": "tsx scripts/embedding-smoke.ts --provider=gemini",
-    "smoke:embeddings:ollama": "tsx scripts/embedding-smoke.ts --provider=ollama"
+    "smoke:embeddings:ollama": "tsx scripts/embedding-smoke.ts --provider=ollama",
+    "eval:documents": "tsx scripts/evaluate-document-rag.ts",
+    "eval:documents:self-check": "tsx scripts/evaluate-document-rag.ts --self-check"
   },
   "engines": {
     "node": ">=20.0.0"

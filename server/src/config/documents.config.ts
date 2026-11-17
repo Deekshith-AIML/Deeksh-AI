@@ -49,7 +49,11 @@ export interface DocumentsConfig {
   /** DOCX (ZIP) resource guards. */
   docxMaxEntries: number;
   docxMaxUncompressedBytes: number;
+  /** Maximum declared uncompressed size for any single ZIP entry. */
+  docxMaxEntryUncompressedBytes: number;
   docxMaxCompressionRatio: number;
+  /** Wall-clock budget for the bounded DOCX ZIP inspection. */
+  docxInspectionTimeoutMs: number;
 
   /** Per-user, per-instance rate limits. */
   uploadRatePerMin: number;
@@ -109,7 +113,14 @@ export function getDocumentsConfig(): DocumentsConfig {
       1_048_576,
       1_073_741_824,
     ),
+    docxMaxEntryUncompressedBytes: intEnv(
+      'DOCX_MAX_ENTRY_UNCOMPRESSED_BYTES',
+      52_428_800,
+      1_048_576,
+      1_073_741_824,
+    ),
     docxMaxCompressionRatio: intEnv('DOCX_MAX_COMPRESSION_RATIO', 100, 1, 10_000),
+    docxInspectionTimeoutMs: intEnv('DOCX_INSPECTION_TIMEOUT_MS', 5000, 100, 120_000),
 
     uploadRatePerMin: intEnv('DOC_RATE_LIMIT_UPLOADS_PER_MIN', 10, 1, 600),
     searchRatePerMin: intEnv('DOC_RATE_LIMIT_SEARCHES_PER_MIN', 60, 1, 6000),

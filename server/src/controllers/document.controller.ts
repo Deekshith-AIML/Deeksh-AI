@@ -16,12 +16,17 @@
 import type { Request, Response, NextFunction } from 'express';
 import { getAuth, getDb } from '../middleware/auth.middleware.js';
 import * as DocumentService from '../services/documents/document.service.js';
-import { isDocumentError } from '../services/documents/errors.js';
+import * as DocumentRetrieval from '../services/documents/retrieval.service.js';
+import { DocumentError, isDocumentError } from '../services/documents/errors.js';
 import { createStorageProvider } from '../services/storage/index.js';
+import { embed } from '../services/embedding.service.js';
+import { getDocumentsConfig } from '../config/documents.config.js';
 import {
   documentListQuerySchema,
   documentRenameSchema,
+  documentSearchSchema,
 } from '../../../shared/schemas.js';
+import type { DocumentSearchHit } from '../../../shared/types.js';
 
 function fail(err: unknown, res: Response, next: NextFunction): void {
   if (isDocumentError(err)) {
@@ -34,6 +39,111 @@ function fail(err: unknown, res: Response, next: NextFunction): void {
     return;
   }
   next(err);
+}
+
+/** Maximum excerpt length returned by semantic search. */
+const SEARCH_PREVIEW_CHARS = 400;
+
+/** Build a bounded, display-safe excerpt from a retrieved chunk. */
+function toPreview(content: string): string {
+  const normalised = content.trim();
+  if (normalised.length <= SEARCH_PREVIEW_CHARS) return normalised;
+  return `${normalised.slice(0, SEARCH_PREVIEW_CHARS).trimEnd()}…`;
+}
+
+/**
+ * POST /api/documents/search — semantic search over the caller's ready docs.
+ *
+ * The vector SQL stays in the `match_document_chunks` RPC; this handler only
+ * validates input, verifies an optional document scope, embeds the query and
+ * maps rows to the public `DocumentSearchResponse` shape.
+ */
+export async function searchDocumentsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { userId } = getAuth(req);
+    const db = getDb(req);
+
+    const parsed = documentSearchSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({
+        error: 'Invalid search query',
+        code: 'INVALID_SEARCH_QUERY',
+        details: parsed.error.flatten(),
+      });
+      return;
+    }
+
+    const { query, document_ids, threshold, max_results } = parsed.data;
+
+    // Explicitly selected ids are verified before any embedding call, so a
+    // foreign id can never influence retrieval or leak that it exists.
+    if (document_ids && document_ids.length > 0) {
+      await DocumentRetrieval.assertSearchableDocumentScope(db, userId, document_ids);
+    }
+
+    let queryEmbedding: number[];
+    try {
+      // Query-role formatting is required to match document embeddings.
+      queryEmbedding = await embed(query, { role: 'query' });
+    } catch (err) {
+      console.warn(
+        '[documents.search] query embedding failed:',
+        err instanceof Error ? err.message : err,
+      );
+      throw new DocumentError(
+        'Search is temporarily unavailable. Please try again.',
+        'DOCUMENT_SEARCH_EMBEDDING_FAILED',
+        503,
+      );
+    }
+
+    const config = getDocumentsConfig();
+    const hits = await DocumentRetrieval.searchDocumentChunks(
+      db,
+      userId,
+      queryEmbedding,
+      {
+        documentIds: document_ids,
+        threshold,
+        maxResults: Math.min(Math.max(max_results ?? config.retrievalTopK, 1), 50),
+        // The Knowledge Base search surface reports DB outages honestly
+        // instead of returning a misleading empty result.
+        throwOnError: true,
+      },
+    );
+
+    // Defence in depth: the RPC already filters by user_id + ready status.
+    const paragraphs = await DocumentRetrieval.loadChunkParagraphRanges(
+      db,
+      userId,
+      hits.map((hit) => hit.chunkId),
+    );
+
+    const chunks: DocumentSearchHit[] = hits
+      .filter((hit) => hit.userId === userId)
+      .map((hit) => ({
+        chunk_id: hit.chunkId,
+        document_id: hit.documentId,
+        filename: hit.filename,
+        chunk_index: hit.chunkIndex,
+        page_start: hit.pageStart,
+        page_end: hit.pageEnd,
+        heading: hit.heading,
+        section_path: hit.sectionPath,
+        paragraph_start: paragraphs.get(hit.chunkId)?.paragraphStart ?? null,
+        paragraph_end: paragraphs.get(hit.chunkId)?.paragraphEnd ?? null,
+        similarity: hit.similarity,
+        preview: toPreview(hit.content),
+      }));
+
+    res.json({ chunks, count: chunks.length });
+  } catch (err) {
+    fail(err, res, next);
+  }
 }
 
 /** POST /api/documents — multipart upload. */

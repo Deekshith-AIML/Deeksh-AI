@@ -59,11 +59,13 @@ describe('M5 Phase 5 chunk embedding', () => {
 
     const persisted = await embedAndPersistChunks(client, 'doc-1', 'user-1', chunks, config);
     expect(persisted.length).toBe(2);
-    expect(persisted[0].embedding).not.toBeNull();
-    expect(persisted[0].embedding!.length).toBe(1536);
-    expect(persisted[0].embedding_provider).toBe('gemini');
-    expect(persisted[0].embedding_model_version).toBe('gemini-embedding-2');
-    expect(persisted[0].embedding_dimensions).toBe(1536);
+    const first = persisted[0];
+    if (!first) throw new Error('Expected at least one persisted chunk');
+    expect(first.embedding).not.toBeNull();
+    expect(first.embedding!.length).toBe(1536);
+    expect(first.embedding_provider).toBe('gemini');
+    expect(first.embedding_model_version).toBe('gemini-embedding-2');
+    expect(first.embedding_dimensions).toBe(1536);
   });
 
   it('deletes existing chunks before re-persisting (idempotent)', async () => {
@@ -109,7 +111,9 @@ describe('M5 Phase 5 chunk embedding', () => {
     ];
     await embedAndPersistChunks(client, 'doc-1', 'user-1', chunks2, config);
     expect(fakeDb.document_chunks.length).toBe(1);
-    expect(fakeDb.document_chunks[0].content).toBe('Updated');
+    const updated = fakeDb.document_chunks[0];
+    if (!updated) throw new Error('Expected a persisted chunk');
+    expect(updated.content).toBe('Updated');
   });
 
   it('deleteDocumentChunks removes all chunks', async () => {

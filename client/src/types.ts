@@ -126,6 +126,8 @@ export interface DocumentSearchHit {
   page_end: number | null;
   heading: string | null;
   section_path: string | null;
+  paragraph_start: number | null;
+  paragraph_end: number | null;
   similarity: number;
   preview: string;
 }

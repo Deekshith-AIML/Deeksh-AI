@@ -26,6 +26,9 @@ import { extractDocx } from './docx.extractor.js';
 import { extractTxt } from './txt.extractor.js';
 import { normalizeParagraphs } from './normalize.js';
 
+/** Structural role of an extracted block. */
+export type DocumentBlockType = 'heading' | 'paragraph' | 'table-row' | 'list-item';
+
 /** Raw paragraph from a parser (provenance is optional; index.ts fills it). */
 export interface RawParagraph {
   text: string;
@@ -33,6 +36,14 @@ export interface RawParagraph {
   pageEnd?: number | null;
   heading?: string | null;
   sectionPath?: string | null;
+  /** Structural role; DOCX extractors populate this. */
+  blockType?: DocumentBlockType;
+  /** 1–6 for DOCX headings; null/absent otherwise. */
+  headingLevel?: number | null;
+  /** Zero-based table ordinal within the document (table rows only). */
+  tableIndex?: number | null;
+  /** Zero-based row ordinal within its table (table rows only). */
+  tableRowIndex?: number | null;
 }
 
 /** What a parser returns before normalization. */
@@ -56,6 +67,14 @@ export interface ParagraphProvenance {
   /** Character offsets into `totalText` (inclusive start, exclusive end). */
   charStart: number;
   charEnd: number;
+  /** Structural role (DOCX); null/absent for PDF/TXT. */
+  blockType?: DocumentBlockType;
+  /** DOCX heading level 1–6; null/absent otherwise. */
+  headingLevel?: number | null;
+  /** DOCX table ordinal (table rows only). */
+  tableIndex?: number | null;
+  /** DOCX row ordinal within its table (table rows only). */
+  tableRowIndex?: number | null;
 }
 
 export interface ExtractionResult {

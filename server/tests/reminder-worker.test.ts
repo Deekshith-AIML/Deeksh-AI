@@ -391,11 +391,16 @@ describe('reminder scheduler (Milestone 2)', () => {
   // --- Backoff math (bounded exponential) ----------------------------------
 
   it('computeBackoffMs grows exponentially and is bounded by the cap', () => {
-    expect(computeBackoffMs(1)).toBe(60_000); // 1 min
-    expect(computeBackoffMs(2)).toBe(120_000); // 2 min
-    expect(computeBackoffMs(3)).toBe(240_000); // 4 min
-    expect(computeBackoffMs(10)).toBe(3_600_000); // capped at 1 hour
-    expect(computeBackoffMs(50)).toBe(3_600_000); // stays capped
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    try {
+      expect(computeBackoffMs(1)).toBe(60_000); // 1 min, jitter at midpoint (0.5)
+      expect(computeBackoffMs(2)).toBe(120_000); // 2 min
+      expect(computeBackoffMs(3)).toBe(240_000); // 4 min
+      expect(computeBackoffMs(10)).toBe(3_600_000); // capped at 1 hour
+      expect(computeBackoffMs(50)).toBe(3_600_000); // stays capped
+    } finally {
+      vi.restoreAllMocks()
+    }
   });
 
   // --- Email content safety ------------------------------------------------

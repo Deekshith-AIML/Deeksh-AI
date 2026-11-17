@@ -59,9 +59,7 @@ describe('M5 Phase 9 citation validation', () => {
     const sourceMap = buildSourceMap(sources);
     const reply = '[S3] [S1] [S2]';
     const result = validateCitations(reply, sourceMap);
-    expect(result.sources[0].marker).toBe('S1');
-    expect(result.sources[1].marker).toBe('S2');
-    expect(result.sources[2].marker).toBe('S3');
+    expect(result.sources.map((source) => source.marker)).toEqual(['S1', 'S2', 'S3']);
   });
 
   it('handles empty source map', () => {

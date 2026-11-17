@@ -101,16 +101,34 @@ const defaultLogger: SchedulerLogger = {
 // ---------------------------------------------------------------------------
 
 /**
- * Bounded exponential backoff: base * 2^(attempts-1), capped at maxMs.
- * attempts=1 → base, 2 → 2×base, 3 → 4×base, … never beyond maxMs.
+ * Bounded exponential backoff with jitter: base * 2^(attempts-1), capped at maxMs,
+ * then multiplied by a random jitter factor in [1 - jitterRatio, 1 + jitterRatio]
+ * to prevent thundering-herd collisions. The random source is injectable for
+ * deterministic test control (default: Math.random).
+ *
+ * Without jitter the function is purely deterministic:
+ *   attempts=1 → base, 2 → 2×base, 3 → 4×base, … never beyond maxMs.
+ *
+ * With jitter (default ratio 0.25 = 25%):
+ *   attempts=1 → base * [0.75, 1.25]
+ *   attempts=2 → 2×base * [0.75, 1.25]
+ *   etc.
  */
 export function computeBackoffMs(
   attempts: number,
   baseMs = 60_000,
   maxMs = 3_600_000,
+  jitterRatio = 0.25,
+  rng = Math.random,
 ): number {
   const exponent = Math.max(0, attempts - 1);
-  return Math.min(baseMs * 2 ** exponent, maxMs);
+  // Base delay with exponential backoff, capped at maxMs before jitter.
+  const baseDelay = Math.min(baseMs * 2 ** exponent, maxMs);
+  // Jitter: random factor in [1 - jitterRatio, 1 + jitterRatio].
+  // The final result is clamped to maxMs to guarantee the absolute
+  // maximum delay is never exceeded, even when jitter > 1.
+  const jitter = 1 - jitterRatio + rng() * (jitterRatio * 2);
+  return Math.min(maxMs, baseDelay * jitter);
 }
 
 // ---------------------------------------------------------------------------

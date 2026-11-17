@@ -14,7 +14,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.middleware.js';
 import { documentUploadMiddleware } from '../middleware/upload.middleware.js';
-import { uploadRateLimiter } from '../middleware/rate-limit.middleware.js';
+import { uploadRateLimiter, searchRateLimiter } from '../middleware/rate-limit.middleware.js';
 import {
   downloadDocumentHandler,
   deleteDocumentHandler,
@@ -23,6 +23,7 @@ import {
   listDocumentsHandler,
   renameDocumentHandler,
   retryDocumentHandler,
+  searchDocumentsHandler,
   uploadDocumentHandler,
   viewDocumentHandler,
 } from '../controllers/document.controller.js';
@@ -34,6 +35,9 @@ router.use(requireAuth);
 
 router.get('/', listDocumentsHandler);
 router.post('/', uploadRateLimiter, documentUploadMiddleware(), uploadDocumentHandler);
+
+// Must be declared before `/:id` so the dynamic id route cannot shadow it.
+router.post('/search', searchRateLimiter, searchDocumentsHandler);
 
 router.get('/:id', getDocumentHandler);
 router.patch('/:id', renameDocumentHandler);

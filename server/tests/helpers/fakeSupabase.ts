@@ -205,6 +205,76 @@ export interface FakeDocumentJob {
   updated_at: string;
 }
 
+/** Row in `public.agent_runs` (Milestone 6). */
+export interface FakeAgentRun {
+  id: string;
+  user_id: string;
+  objective: string;
+  status: string;
+  summary: Record<string, unknown>;
+  final_response: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  idempotency_key: string | null;
+  claimed_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Row in `public.agent_run_steps` (Milestone 6). */
+export interface FakeAgentRunStep {
+  id: string;
+  run_id: string;
+  user_id: string;
+  step_key: string;
+  agent_name: string;
+  operation: string;
+  status: string;
+  depends_on: string[];
+  input_metadata: Record<string, unknown>;
+  output_metadata: Record<string, unknown>;
+  retry_count: number;
+  requires_approval: boolean;
+  error_code: string | null;
+  error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Row in `public.agent_approvals` (Milestone 6). */
+export interface FakeAgentApproval {
+  id: string;
+  run_id: string;
+  step_id: string;
+  user_id: string;
+  action_description: string;
+  proposed_payload: Record<string, unknown>;
+  payload_hash: string;
+  status: string;
+  expires_at: string;
+  decided_at: string | null;
+  executed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Row in `public.agent_audit_events` (Milestone 6 — append-only). */
+export interface FakeAgentAuditEvent {
+  id: string;
+  user_id: string;
+  run_id: string | null;
+  step_id: string | null;
+  approval_id: string | null;
+  event: string;
+  outcome: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 /** Per-user auth metadata reported back by `auth.getUser`. */
 interface FakeUserMeta {
   provider: 'email' | 'google';
@@ -234,6 +304,10 @@ interface FakeState {
   documents: FakeDocument[];
   documentChunks: FakeDocumentChunk[];
   documentJobs: FakeDocumentJob[];
+  agentRuns: FakeAgentRun[];
+  agentRunSteps: FakeAgentRunStep[];
+  agentApprovals: FakeAgentApproval[];
+  agentAuditEvents: FakeAgentAuditEvent[];
   /** Monotonic counter for deterministic created_at ordering. */
   seq: number;
   /** Injected DB failures consumed on the next matching operation. */
@@ -264,6 +338,10 @@ const state: FakeState = {
   documents: [],
   documentChunks: [],
   documentJobs: [],
+  agentRuns: [],
+  agentRunSteps: [],
+  agentApprovals: [],
+  agentAuditEvents: [],
   seq: 0,
   failures: [],
   concurrentInserts: [],
@@ -416,6 +494,10 @@ export function resetFakeSupabase(): void {
   state.documents = [];
   state.documentChunks = [];
   state.documentJobs = [];
+  state.agentRuns = [];
+  state.agentRunSteps = [];
+  state.agentApprovals = [];
+  state.agentAuditEvents = [];
   storageObjects.clear();
   storageFailures.length = 0;
   state.seq = 0;
@@ -469,6 +551,18 @@ export const fakeDb = {
   get document_processing_jobs() {
     return state.documentJobs;
   },
+  get agent_runs() {
+    return state.agentRuns;
+  },
+  get agent_run_steps() {
+    return state.agentRunSteps;
+  },
+  get agent_approvals() {
+    return state.agentApprovals;
+  },
+  get agent_audit_events() {
+    return state.agentAuditEvents;
+  },
 };
 
 /** Return the backing array for a supported table (structurally typed). */
@@ -494,6 +588,16 @@ function rowsFor(table: string): Array<Record<string, unknown>> {
   if (table === 'document_processing_jobs') {
     return state.documentJobs as unknown as Array<Record<string, unknown>>;
   }
+  if (table === 'agent_runs') return state.agentRuns as unknown as Array<Record<string, unknown>>;
+  if (table === 'agent_run_steps') {
+    return state.agentRunSteps as unknown as Array<Record<string, unknown>>;
+  }
+  if (table === 'agent_approvals') {
+    return state.agentApprovals as unknown as Array<Record<string, unknown>>;
+  }
+  if (table === 'agent_audit_events') {
+    return state.agentAuditEvents as unknown as Array<Record<string, unknown>>;
+  }
   throw new Error(`fakeSupabase: unexpected table "${table}"`);
 }
 
@@ -513,6 +617,7 @@ class FakeQuery implements PromiseLike<FakeResult> {
   private eqs: Array<[string, unknown]> = [];
   private neqs: Array<[string, unknown]> = [];
   private lts: Array<[string, unknown]> = [];
+  private gts: Array<[string, unknown]> = [];
   private ilikes: Array<[string, string]> = [];
   private ins: Array<[string, unknown[]]> = [];
   private patch: Record<string, unknown> | null = null;
@@ -574,6 +679,12 @@ class FakeQuery implements PromiseLike<FakeResult> {
     return this;
   }
 
+  /** Greater-than filter (column > value), lexicographic for strings. */
+  gt(column: string, value: unknown): this {
+    this.gts.push([column, value]);
+    return this;
+  }
+
   /** `IN` filter — column value must be one of `values`. */
   in(column: string, values: unknown[]): this {
     this.ins.push([column, values]);
@@ -624,6 +735,11 @@ class FakeQuery implements PromiseLike<FakeResult> {
       const a = String(row[col] ?? '');
       const b = String(val ?? '');
       if (!(a < b)) return false;
+    }
+    for (const [col, val] of this.gts) {
+      const a = String(row[col] ?? '');
+      const b = String(val ?? '');
+      if (!(a > b)) return false;
     }
     for (const [col, vals] of this.ins) {
       if (!vals.includes(row[col])) return false;
@@ -807,6 +923,48 @@ class FakeQuery implements PromiseLike<FakeResult> {
           state.documentChunks = keep as unknown as FakeDocumentChunk[];
         } else if (this.table === 'document_processing_jobs') {
           state.documentJobs = keep as unknown as FakeDocumentJob[];
+        } else if (this.table === 'agent_runs') {
+          // Emulate ON DELETE CASCADE to steps and approvals; audit rows
+          // survive with run_id/step_id set to NULL (append-only trail).
+          const removedRunIds = new Set(
+            rows.filter((r) => this.matches(r)).map((r) => String(r.id)),
+          );
+          state.agentRunSteps = state.agentRunSteps.filter(
+            (s) => !removedRunIds.has(s.run_id),
+          );
+          state.agentApprovals = state.agentApprovals.filter(
+            (a) => !removedRunIds.has(a.run_id),
+          );
+          for (const e of state.agentAuditEvents) {
+            if (e.run_id && removedRunIds.has(e.run_id)) {
+              e.run_id = null;
+              if (e.step_id) e.step_id = null;
+            }
+          }
+          state.agentRuns = keep as unknown as FakeAgentRun[];
+        } else if (this.table === 'agent_run_steps') {
+          const removedStepIds = new Set(
+            rows.filter((r) => this.matches(r)).map((r) => String(r.id)),
+          );
+          state.agentApprovals = state.agentApprovals.filter(
+            (a) => !removedStepIds.has(a.step_id),
+          );
+          for (const e of state.agentAuditEvents) {
+            if (e.step_id && removedStepIds.has(e.step_id)) e.step_id = null;
+          }
+          state.agentRunSteps = keep as unknown as FakeAgentRunStep[];
+        } else if (this.table === 'agent_approvals') {
+          const removedApprovalIds = new Set(
+            rows.filter((r) => this.matches(r)).map((r) => String(r.id)),
+          );
+          for (const e of state.agentAuditEvents) {
+            if (e.approval_id && removedApprovalIds.has(e.approval_id)) e.approval_id = null;
+          }
+          state.agentApprovals = keep as unknown as FakeAgentApproval[];
+        } else if (this.table === 'agent_audit_events') {
+          // Append-only in production (no DELETE policy is granted); the
+          // fake supports it only for test hygiene.
+          state.agentAuditEvents = keep as unknown as FakeAgentAuditEvent[];
         }
         return this.returning ? this.applyTerminal(removed) : { data: null, error: null };
       }
@@ -840,6 +998,21 @@ function fakeRpc(
   fn: string,
   args: Record<string, unknown>,
 ): { data: unknown; error: { message: string; code?: string } | null } {
+  // Optional RPC outage injection: injectDatabaseFailure(fn, 'rpc') or
+  // injectDatabaseFailure('rpc', fn).
+  const rpcFailureIndex = state.failures.findIndex(
+    (f) =>
+      (f.table === fn && f.op === 'rpc') ||
+      (f.table === 'rpc' && f.op === fn),
+  );
+  if (rpcFailureIndex !== -1) {
+    const [failure] = state.failures.splice(rpcFailureIndex, 1);
+    return {
+      data: null,
+      error: { message: failure!.message, code: 'XX000' },
+    };
+  }
+
   if (fn === 'claim_due_reminders') {
     const limit = Number(args.p_limit ?? 10);
     if (!Number.isFinite(limit) || limit < 1 || limit > 100) {

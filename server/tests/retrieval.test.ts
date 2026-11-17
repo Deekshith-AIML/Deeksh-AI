@@ -3,6 +3,20 @@ import { searchDocumentChunks } from '../src/services/documents/retrieval.servic
 import { resetFakeSupabase, registerUser, fakeDb } from '../tests/helpers/fakeSupabase.js';
 import { fakeCreateUserScopedClient } from '../tests/helpers/fakeSupabase.js';
 
+/** Return the seeded document, failing the test clearly if the fixture is missing. */
+function getSeededDocument() {
+  const document = fakeDb.documents[0];
+  if (!document) throw new Error('Expected a seeded document fixture');
+  return document;
+}
+
+/** Return the first retrieval hit, failing the test clearly if none was returned. */
+function getFirstHit(results: Awaited<ReturnType<typeof searchDocumentChunks>>) {
+  const first = results[0];
+  if (!first) throw new Error('Expected at least one retrieval result');
+  return first;
+}
+
 describe('M5 Phase 7 retrieval', () => {
   beforeEach(() => {
     resetFakeSupabase();
@@ -85,8 +99,9 @@ describe('M5 Phase 7 retrieval', () => {
     const embedding = Array.from({ length: 1536 }, () => 0.5);
     const results = await searchDocumentChunks(client, 'user-1', embedding, { threshold: 0.1 });
     expect(results.length).toBeGreaterThan(0);
-    expect(results[0].userId).toBe('user-1');
-    expect(results[0].filename).toBe('guide.pdf');
+    const first = getFirstHit(results);
+    expect(first.userId).toBe('user-1');
+    expect(first.filename).toBe('guide.pdf');
   });
 
   it('excludes other users chunks', async () => {
@@ -97,7 +112,7 @@ describe('M5 Phase 7 retrieval', () => {
   });
 
   it('excludes non-ready documents', async () => {
-    fakeDb.documents[0].status = 'processing';
+    getSeededDocument().status = 'processing';
     const client = fakeCreateUserScopedClient('token-1');
     const embedding = Array.from({ length: 1536 }, () => 0.5);
     const results = await searchDocumentChunks(client, 'user-1', embedding, { threshold: 0.1 });
@@ -118,13 +133,14 @@ describe('M5 Phase 7 retrieval', () => {
     const client = fakeCreateUserScopedClient('token-1');
     const embedding = Array.from({ length: 1536 }, () => 0.5);
     const results = await searchDocumentChunks(client, 'user-1', embedding, { threshold: 0.1 });
-    expect(results[0].pageStart).toBe(4);
-    expect(results[0].heading).toBe('Skills');
-    expect(results[0].sectionPath).toBe('2 > Skills');
+    const first = getFirstHit(results);
+    expect(first.pageStart).toBe(4);
+    expect(first.heading).toBe('Skills');
+    expect(first.sectionPath).toBe('2 > Skills');
   });
 
   it('excludes deleted documents', async () => {
-    fakeDb.documents[0].status = 'deleted';
+    getSeededDocument().status = 'deleted';
     const client = fakeCreateUserScopedClient('token-1');
     const embedding = Array.from({ length: 1536 }, () => 0.5);
     const results = await searchDocumentChunks(client, 'user-1', embedding, { threshold: 0.1 });

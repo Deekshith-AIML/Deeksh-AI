@@ -20,10 +20,10 @@
  * structurally safe to process.
  */
 
-import JSZip from 'jszip';
 import type { DocumentsConfig } from '../../config/documents.config.js';
 import type { DocumentExtension, DocumentMimeType } from '../../../../shared/types.js';
 import { DocumentValidationError } from './errors.js';
+import { inspectDocxZip } from './docx.zip.js';
 
 export const ALLOWED_EXTENSIONS = ['pdf', 'docx', 'txt'] as const;
 
@@ -163,18 +163,10 @@ export function hasEncryptedZipEntry(bytes: Buffer): boolean {
 // DOCX (ZIP) preflight
 // ---------------------------------------------------------------------------
 
-interface ZipEntryMeta {
-  uncompressedSize?: number;
-  compressedSize?: number;
-}
-
 /**
- * Resource guards for DOCX before parsing:
- * - entry count cap
- * - total declared uncompressed size cap
- * - per-entry compression-ratio cap (zip bomb)
- * - encrypted entries refused
- * - required OOXML parts present
+ * Resource and structure guards for DOCX before parsing. The bounded
+ * inspection lives in `docx.zip.ts`; this wrapper keeps the historical
+ * `preflightDocx` entry point used by upload validation and tests.
  */
 export async function preflightDocx(bytes: Buffer, config: DocumentsConfig): Promise<void> {
   if (!looksLikeZip(bytes)) {
@@ -184,84 +176,7 @@ export async function preflightDocx(bytes: Buffer, config: DocumentsConfig): Pro
       400,
     );
   }
-  if (hasEncryptedZipEntry(bytes)) {
-    throw new DocumentValidationError(
-      'Password-protected documents are not supported.',
-      'DOCX_ENCRYPTED',
-      400,
-    );
-  }
-
-  let zip: JSZip;
-  try {
-    zip = await JSZip.loadAsync(bytes, { checkCRC32: false });
-  } catch {
-    throw new DocumentValidationError(
-      'This DOCX file is corrupted and cannot be read.',
-      'MALFORMED_FILE',
-      400,
-    );
-  }
-
-  const names = Object.keys(zip.files);
-  if (names.length > config.docxMaxEntries) {
-    throw new DocumentValidationError(
-      'This DOCX file contains too many internal parts.',
-      'DOCX_TOO_MANY_ENTRIES',
-      400,
-    );
-  }
-
-  let totalUncompressed = 0;
-  for (const name of names) {
-    const entry = zip.files[name];
-    if (!entry || entry.dir) continue;
-    const meta = (entry as unknown as { _data?: ZipEntryMeta })._data;
-    const uncompressed = Number(meta?.uncompressedSize ?? 0);
-    const compressed = Number(meta?.compressedSize ?? 0);
-
-    if (!Number.isFinite(uncompressed) || uncompressed < 0) {
-      throw new DocumentValidationError(
-        'This DOCX file has an invalid internal structure.',
-        'MALFORMED_FILE',
-        400,
-      );
-    }
-
-    totalUncompressed += uncompressed;
-    if (totalUncompressed > config.docxMaxUncompressedBytes) {
-      throw new DocumentValidationError(
-        'This DOCX file expands beyond the allowed size.',
-        'DOCX_TOO_LARGE',
-        413,
-      );
-    }
-
-    // A zero compressed size with a large payload is a classic bomb shape.
-    if (compressed === 0) {
-      if (uncompressed > 1_048_576) {
-        throw new DocumentValidationError(
-          'This DOCX file has an unsafe compression ratio.',
-          'DOCX_COMPRESSION_RATIO',
-          400,
-        );
-      }
-    } else if (uncompressed / compressed > config.docxMaxCompressionRatio) {
-      throw new DocumentValidationError(
-        'This DOCX file has an unsafe compression ratio.',
-        'DOCX_COMPRESSION_RATIO',
-        400,
-      );
-    }
-  }
-
-  if (!names.includes('[Content_Types].xml') || !names.includes('word/document.xml')) {
-    throw new DocumentValidationError(
-      'This archive is not a Word document.',
-      'MALFORMED_FILE',
-      400,
-    );
-  }
+  inspectDocxZip(bytes, config);
 }
 
 // ---------------------------------------------------------------------------

@@ -34,7 +34,9 @@
 
 import OpenAI from 'openai';
 import type {
+  ChatCompletionMessage,
   ChatCompletionMessageParam,
+  ChatCompletionMessageToolCall,
   ChatCompletionTool,
 } from 'openai/resources/chat/completions';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -575,7 +577,8 @@ async function dispatchToolCall(
 // Gemini call wrapper — converts SDK failures into safe AiServiceErrors
 // ---------------------------------------------------------------------------
 
-type CompletionParams = Parameters<typeof gemini.chat.completions.create>[0];
+/** Shared completion-parameter type (exported for the M6 agent layer). */
+export type CompletionParams = Parameters<typeof gemini.chat.completions.create>[0];
 
 /**
  * Redact API-key-shaped substrings (Google `AIza…` keys and `sk-…` style
@@ -610,6 +613,7 @@ function mapUpstreamError(err: unknown): AiServiceError {
     status === 403 ||
     detail.includes('api_key_invalid') ||
     detail.includes('api key not valid') ||
+    detail.includes('please pass a valid api key') ||
     detail.includes('permission_denied') ||
     detail.includes('unauthenticated')
   ) {
@@ -617,7 +621,7 @@ function mapUpstreamError(err: unknown): AiServiceError {
       'The AI service rejected the server credentials. Please contact the site operator.',
       502,
       true,
-      false, // NOT fallback eligible - auth won't work on another provider
+      true, // fallback eligible - local Ollama does not need Gemini credentials
     );
   }
 
@@ -661,6 +665,17 @@ function mapUpstreamError(err: unknown): AiServiceError {
       502,
       true,
       true, // fallback eligible
+    );
+  }
+
+  // 400 errors from Gemini with an invalid API key surface as generic 400s.
+  // Local Ollama does not need Gemini credentials, so treat as fallback-eligible.
+  if (status === 400) {
+    return new AiServiceError(
+      'The AI service is currently unavailable.',
+      502,
+      true,
+      true, // fallback eligible - local Ollama does not need Gemini credentials
     );
   }
 
@@ -720,8 +735,12 @@ async function createCompletionWithProvider(
  * Invoke Gemini with fallback to Ollama on eligible failures.
  * Falls back only for: timeout, network, rate limit, quota, 5xx errors.
  * Does NOT fall back for: 400 (validation), 401/403 (auth), 404 (model not found).
+ *
+ * Exported in M6 Phase 1 so the orchestrator/agents reuse this exact
+ * provider path (single abstraction, same auth/fallback rules) instead of
+ * duplicating it. `chat()` behavior is unchanged.
  */
-async function createCompletionWithFallback(
+export async function createCompletionWithFallback(
   params: CompletionParams,
 ): Promise<OpenAI.Chat.ChatCompletion> {
   // Try Gemini first
@@ -813,6 +832,161 @@ export async function saveMessage(
     return null;
   }
   return String((data as { id?: string } | null)?.id ?? null);
+}
+
+// ---------------------------------------------------------------------------
+// Tool-call repair (local Ollama quirks)
+// ---------------------------------------------------------------------------
+
+/** Marker some models emit inside `content` instead of `tool_calls`. */
+const TOOL_CALLS_MARKER = '[TOOL_CALLS]';
+
+/**
+ * Normalize one tool call's `arguments` to a JSON string.
+ *
+ * The OpenAI wire format declares `function.arguments` as a STRING of
+ * JSON, but Ollama returns a parsed object. Downstream `JSON.parse`
+ * would reject "[object Object]", so every shape is serialized here.
+ */
+function serializeToolArguments(args: unknown): string {
+  if (typeof args === 'string') return args;
+  if (args == null) return '';
+  try {
+    return JSON.stringify(args);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Slice the first balanced JSON array starting at index `from`, honouring
+ * string literals so a `]` inside a string cannot terminate early.
+ */
+function sliceBalancedJsonArray(text: string, from: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = from; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '[') {
+      depth += 1;
+      continue;
+    }
+    if (ch === ']') {
+      depth -= 1;
+      if (depth === 0) return text.slice(from, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * Repair non-standard tool calls so they actually dispatch.
+ *
+ * Local Ollama (`mistral:latest`) exhibits two quirks with the real
+ * TaskMate system prompt + history:
+ *   1. It writes `[TOOL_CALLS] [{"name":…,"arguments":{…}}]` into
+ *      `content` instead of populating `tool_calls`. Unrepaired, the
+ *      chat loop treats it as the final answer — the user is told
+ *      "task created" while the database is never touched.
+ *   2. It populates `tool_calls` but returns `function.arguments` as a
+ *      JSON object instead of the required JSON string, which would make
+ *      argument parsing fail and the tool call report an error.
+ *
+ * Returns the input message untouched when no repair is needed;
+ * otherwise a shallow copy with `tool_calls` normalized and the marker
+ * payload (including any pre-confirmation prose the model wrote before
+ * running the tool) removed from `content`.
+ */
+function repairToolCalls(message: ChatCompletionMessage): ChatCompletionMessage {
+  const content = typeof message.content === 'string' ? message.content : null;
+  const existing = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  const markerIdx = content === null ? -1 : content.indexOf(TOOL_CALLS_MARKER);
+  const argsNeedFix = existing.some((call) => typeof call.function?.arguments !== 'string');
+  if (markerIdx < 0 && !argsNeedFix) return message;
+
+  // 1. Normalize whatever structured tool calls the provider did send.
+  const toolCalls: ChatCompletionMessageToolCall[] = existing
+    .map((call, index) => ({
+      id: typeof call.id === 'string' && call.id.length > 0 ? call.id : `call_${index}`,
+      type: 'function' as const,
+      function: {
+        name: String(call.function?.name ?? ''),
+        arguments: serializeToolArguments(call.function?.arguments),
+      },
+    }))
+    .filter((call) => call.function.name.length > 0);
+
+  // 2. Recover tool calls embedded in `content` after the marker.
+  let newContent = content;
+  if (markerIdx >= 0 && content !== null) {
+    const before = content.slice(0, markerIdx);
+    const after = content.slice(markerIdx + TOOL_CALLS_MARKER.length);
+    const arrStart = after.indexOf('[');
+    const arrRaw = arrStart >= 0 ? sliceBalancedJsonArray(after, arrStart) : null;
+    let parsed: unknown = null;
+    if (arrRaw !== null) {
+      try {
+        parsed = JSON.parse(arrRaw);
+      } catch {
+        parsed = null;
+      }
+    }
+    if (arrRaw !== null && Array.isArray(parsed)) {
+      for (const entry of parsed) {
+        if (entry === null || typeof entry !== 'object') continue;
+        const e = entry as {
+          id?: unknown;
+          name?: unknown;
+          arguments?: unknown;
+          function?: { name?: unknown; arguments?: unknown };
+        };
+        const name =
+          typeof e.name === 'string'
+            ? e.name
+            : typeof e.function?.name === 'string'
+              ? e.function.name
+              : '';
+        if (!name) continue;
+        const args = e.arguments !== undefined ? e.arguments : e.function?.arguments;
+        const serialized = serializeToolArguments(args);
+        // Skip duplicates of structured calls already collected above.
+        if (toolCalls.some((c) => c.function.name === name && c.function.arguments === serialized)) {
+          continue;
+        }
+        toolCalls.push({
+          id:
+            typeof e.id === 'string' && e.id.length > 0
+              ? e.id
+              : `call_repaired_${toolCalls.length + 1}`,
+          type: 'function',
+          function: { name, arguments: serialized },
+        });
+      }
+      // Drop the marker AND the payload (incl. any pre-confirmation prose
+      // between them) — the tool has not run yet at this point.
+      newContent = (before + after.slice(arrStart + arrRaw.length)).trim() || null;
+    } else {
+      // Unparseable payload: at least remove the raw marker token.
+      newContent = (before + after).trim() || null;
+    }
+  }
+
+  return {
+    ...message,
+    content: newContent,
+    tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -954,7 +1128,12 @@ export async function chat(
       temperature: 0.3,
     });
 
-    const assistantMessage = completion.choices[0]?.message;
+    const rawMessage = completion.choices[0]?.message;
+    // Local Ollama sometimes emits tool calls in non-standard ways
+    // (`[TOOL_CALLS]` inside content, or object-valued `arguments`).
+    // Repair them before the loop so they actually dispatch instead of
+    // the model hallucinating a confirmation with nothing persisted.
+    const assistantMessage = rawMessage ? repairToolCalls(rawMessage) : undefined;
 
     // No tool calls → this is the final answer.
     if (!assistantMessage?.tool_calls?.length) {
@@ -980,7 +1159,7 @@ export async function chat(
         client,
         userId,
         toolCall.function?.name,
-        toolCall.function?.arguments ?? '',
+        serializeToolArguments(toolCall.function?.arguments),
         { sourceMessageId },
       );
       messages.push({

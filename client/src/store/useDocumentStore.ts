@@ -154,7 +154,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       });
       return data;
     } catch (err: any) {
-      set({ error: err?.response?.data?.error ?? 'Search failed' });
+      // The API interceptor has already reduced the response to a safe message.
+      set({ error: err?.message ?? 'Search failed' });
       return null;
     }
   },
